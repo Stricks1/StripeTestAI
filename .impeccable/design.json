@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-01T19:27:33.386-03:00",
+  "title": "Design System: Test Store",
+  "extensions": {
+    "colorMeta": {
+      "amber": {
+        "role": "primary",
+        "displayName": "Printed Amber",
+        "canonical": "#e7a13a",
+        "tonalRamp": ["#130900", "#311d00", "#523300", "#754b00", "#a66c00", "#d38e1f", "#fbb450", "#ffebd3"]
+      },
+      "teal": {
+        "role": "secondary",
+        "displayName": "Printed Teal",
+        "canonical": "#78c5b7",
+        "tonalRamp": ["#000f0c", "#002823", "#00453c", "#066358", "#3c8a7d", "#62afa1", "#88d5c7", "#b9fff1"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Matte Ink",
+        "canonical": "#101216",
+        "tonalRamp": ["#090b0f", "#1f2226", "#383b3f", "#53555a", "#787a80", "#9c9ea4", "#c1c4ca", "#ebeef5"]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#f4f0e6",
+        "tonalRamp": ["#0e0b05", "#24211a", "#3d3a32", "#58554d", "#7e7a71", "#a29e95", "#c8c4ba", "#f2eee4"]
+      },
+      "muted-paper": {
+        "role": "neutral",
+        "displayName": "Muted Paper",
+        "canonical": "#c5c1b8",
+        "tonalRamp": ["#0e0b05", "#24211a", "#3d3a33", "#58554d", "#7e7a72", "#a29e95", "#c8c4bb", "#f2eee5"]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Paper Rule",
+        "canonical": "#c9c4b8",
+        "tonalRamp": ["#0e0b04", "#252118", "#3e3a30", "#59554a", "#7f7a6f", "#a39e92", "#c9c4b8", "#f3eee2"]
+      },
+      "field-white": {
+        "role": "neutral",
+        "displayName": "Field White",
+        "canonical": "#fffefa",
+        "tonalRamp": ["#0c0b09", "#22221f", "#3b3a37", "#565552", "#7b7a77", "#9f9e9b", "#c5c4c0", "#efeeea"]
+      },
+      "deep-amber": {
+        "role": "neutral",
+        "displayName": "Deep Amber",
+        "canonical": "#80500f",
+        "tonalRamp": ["#140800", "#331c00", "#543100", "#784902", "#a06e34", "#c79359", "#efb87e", "#ffebd6"]
+      },
+      "deep-teal": {
+        "role": "neutral",
+        "displayName": "Deep Teal",
+        "canonical": "#317568",
+        "tonalRamp": ["#000f0b", "#002922", "#00453b", "#1b6256", "#45887b", "#6aad9f", "#90d4c5", "#baffef"]
+      },
+      "record-surface": {
+        "role": "neutral",
+        "displayName": "Record Ink",
+        "canonical": "#17191d",
+        "tonalRamp": ["#090b0f", "#202226", "#383b3f", "#53555a", "#787a7f", "#9c9ea4", "#c1c4ca", "#eceef4"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Task Headline",
+        "purpose": "Responsive primary headings set in the self-hosted display face."
+      },
+      "title": {
+        "displayName": "Panel Title",
+        "purpose": "Account, checkout, and section headings in the self-hosted display face."
+      },
+      "body": {
+        "displayName": "Interface Body",
+        "purpose": "Explanatory and standard interface copy."
+      },
+      "label": {
+        "displayName": "Record Label",
+        "purpose": "Tracked uppercase codes and compact metadata."
+      }
+    },
+    "motion": [
+      {
+        "name": "button-color-shift",
+        "value": "background-color 140ms ease, color 140ms ease",
+        "purpose": "Primary-button hover state."
+      },
+      {
+        "name": "record-band-print",
+        "value": "560ms cubic-bezier(.16, 1, .3, 1), staggered by 35ms",
+        "purpose": "One restrained entrance on the five-part catalogue stripe; reduced-motion users receive the same visible final state."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "mobile-stack",
+        "value": "760px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "High-contrast action for account and checkout steps.",
+      "html": "<button class=\"ds-button\">CONTINUE</button>",
+      "css": ".ds-button { min-height: 48px; width: 100%; display: inline-flex; align-items: center; justify-content: center; border: 1px solid #101216; padding: 12px 18px; color: #f4f0e6; background: #101216; cursor: pointer; font-family: \"Segoe UI\", Arial, sans-serif; font-size: 12px; font-weight: 750; letter-spacing: .12em; text-align: center; transition: background-color 140ms ease, color 140ms ease; } .ds-button:hover:not(:disabled) { color: #101216; background: #e7a13a; } .ds-button:focus-visible { outline: 3px solid #e7a13a; outline-offset: 3px; } .ds-button:disabled { cursor: wait; opacity: .65; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "field",
+      "description": "Labeled account field with a square, bordered input.",
+      "html": "<label class=\"ds-field\">Username<input class=\"ds-input\" autocomplete=\"username\"></label>",
+      "css": ".ds-field { display: block; margin: 16px 0; color: #24231f; font-family: \"Segoe UI\", Arial, sans-serif; font-size: 13px; font-weight: 650; } .ds-input { width: 100%; height: 44px; margin-top: 6px; border: 1px solid #aaa79e; border-radius: 0; padding: 0 12px; color: #101216; background: #fffefa; font: inherit; } .ds-input:focus-visible { outline: 3px solid #e7a13a; outline-offset: 3px; } .ds-input:disabled { color: #5a5851; background: #e9e5db; }"
+    },
+    {
+      "name": "Amount Field",
+      "kind": "input",
+      "refersTo": "amount-field",
+      "description": "Editable USD amount with aligned tabular numerals.",
+      "html": "<label class=\"ds-amount-label\">Your amount (USD)<span class=\"ds-amount\"><span aria-hidden=\"true\">$</span><input aria-label=\"Amount\" type=\"number\" value=\"10.00\"></span></label>",
+      "css": ".ds-amount-label { display: block; color: #24231f; font-family: \"Segoe UI\", Arial, sans-serif; font-size: 13px; font-weight: 650; } .ds-amount { display: flex; align-items: center; margin-top: 6px; border: 1px solid #aaa79e; background: #fffefa; } .ds-amount > span { padding-left: 13px; color: #55534d; font-size: 16px; } .ds-amount input { width: 100%; height: 46px; margin: 0; border: 0; padding: 0 12px; color: #101216; background: transparent; font: inherit; font-variant-numeric: tabular-nums; } .ds-amount input:focus-visible { outline: 3px solid #e7a13a; outline-offset: 3px; }"
+    },
+    {
+      "name": "Product Record",
+      "kind": "card",
+      "refersTo": "record-card",
+      "description": "Single catalog item separated from the dark shell by a muted border.",
+      "html": "<article class=\"ds-record\"><span class=\"ds-id\">TEST-001</span><div><h3>TEST PRODUCT</h3><p>A single sample product.</p><p class=\"ds-price\">Default amount $10.00</p></div><a class=\"ds-buy\" href=\"#\">BUY</a></article>",
+      "css": ".ds-record { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 24px; align-items: center; border: 1px solid #54565a; padding: 22px; color: #f4f0e6; background: #17191d; font-family: \"Segoe UI\", Arial, sans-serif; } .ds-id { color: #e7a13a; font-size: 12px; font-weight: 700; letter-spacing: .1em; } .ds-record h3 { margin: 0 0 5px; font-family: \"IBM Plex Sans\", \"Segoe UI\", Arial, sans-serif; font-size: 20px; } .ds-record p { margin: 0; color: #c5c1b8; font-size: 14px; } .ds-record .ds-price { margin-top: 8px; color: #78c5b7; font-variant-numeric: tabular-nums; } .ds-buy { min-width: 112px; padding: 12px 18px; border: 1px solid #101216; color: #f4f0e6; background: #101216; text-align: center; text-decoration: none; } .ds-buy:hover { color: #101216; background: #e7a13a; } .ds-buy:focus-visible { outline: 3px solid #e7a13a; outline-offset: 3px; }"
+    },
+    {
+      "name": "Account Tabs",
+      "kind": "nav",
+      "refersTo": "account-tabs",
+      "description": "Two conventional text tabs switch between sign-in and account creation.",
+      "html": "<div class=\"ds-tabs\" role=\"tablist\"><button class=\"ds-tab ds-tab-active\" role=\"tab\" aria-selected=\"true\">Sign in</button><button class=\"ds-tab\" role=\"tab\" aria-selected=\"false\">Create account</button></div>",
+      "css": ".ds-tabs { display: flex; gap: 22px; margin-top: 24px; border-bottom: 1px solid #c9c4b8; font-family: \"Segoe UI\", Arial, sans-serif; } .ds-tab { margin-bottom: -1px; border: 0; border-bottom: 2px solid transparent; padding: 0 0 10px; color: #55534d; background: transparent; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; } .ds-tab-active { color: #101216; border-bottom-color: #e7a13a; } .ds-tab:focus-visible { outline: 3px solid #e7a13a; outline-offset: 3px; }"
+    },
+    {
+      "name": "Site Header",
+      "kind": "nav",
+      "refersTo": "site-header",
+      "description": "Compact wordmark and local status or return link above each task.",
+      "html": "<header class=\"ds-header\"><a class=\"ds-wordmark\" href=\"#\">TEST STORE <span>/ RECORDS</span></a><span class=\"ds-status\">LOCAL TEST</span></header>",
+      "css": ".ds-header { min-height: 78px; padding: 14px 28px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid #44464b; color: #f4f0e6; font-family: \"Segoe UI\", Arial, sans-serif; } .ds-wordmark { color: #f4f0e6; font-size: 14px; font-weight: 750; letter-spacing: .14em; text-decoration: none; } .ds-wordmark span { color: #c5c1b8; font-weight: 500; } .ds-status { color: #78c5b7; font-size: 12px; letter-spacing: .12em; }"
+    },
+    {
+      "name": "Record Code",
+      "kind": "custom",
+      "refersTo": "record-code",
+      "description": "Compact identifier for account, catalog, or payment context.",
+      "html": "<p class=\"ds-code\">RECORD 001 <span>/</span> PAYMENT</p>",
+      "css": ".ds-code { margin: 0; color: #e7a13a; font-family: \"Segoe UI\", Arial, sans-serif; font-size: 11px; font-weight: 750; letter-spacing: .17em; } .ds-code span { padding: 0 4px; color: #78c5b7; }"
+    },
+    {
+      "name": "Record Stripe",
+      "kind": "custom",
+      "refersTo": "catalog-stripe",
+      "description": "Five compact color bands with a single reduced-motion-aware print-in entrance.",
+      "html": "<div class=\"ds-stripe\" aria-hidden=\"true\"><i></i><i></i><i></i><i></i><i></i></div>",
+      "css": ".ds-stripe { display: flex; gap: 4px; width: 220px; height: 9px; } .ds-stripe i { flex: 1; background: #78c5b7; transform-origin: left center; animation: ds-record-band-print 560ms cubic-bezier(.16, 1, .3, 1) both; } .ds-stripe i:nth-child(2) { flex: 1.6; background: #e7a13a; animation-delay: 35ms; } .ds-stripe i:nth-child(3) { flex: .5; background: #f4f0e6; animation-delay: 70ms; } .ds-stripe i:nth-child(4) { flex: 1.3; background: #78c5b7; animation-delay: 105ms; } .ds-stripe i:nth-child(5) { flex: .75; background: #ad5845; animation-delay: 140ms; } @keyframes ds-record-band-print { from { transform: scaleX(.72); filter: saturate(.72); } to { transform: scaleX(1); filter: saturate(1); } } @media (prefers-reduced-motion: reduce) { .ds-stripe i { animation-duration: .01ms; animation-delay: 0ms; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Numbered Record Catalogue",
+    "overview": "The Numbered Record Catalogue treats an account, the single test item, and its payment as precise records. Matte ink and warm paper establish the working surface; orange and teal act as printed marks, while compact codes keep the sequence legible. The result is a focused utility, not a general merchandise storefront.\n\nSelf-hosted IBM Plex Sans headings give the catalogue a compact voice; familiar Segoe UI keeps controls and body copy task-first. Paper panels sit squarely against the dark shell, and prices use tabular numerals. The account and confirmation flow leads to PRODUCTS, then a separate Stripe test checkout with an editable amount.",
+    "keyCharacteristics": [
+      "Ink-dark shell with warm-paper work surfaces.",
+      "Amber and teal record markings, compact codes, and tabular price figures.",
+      "Self-hosted IBM Plex Sans headings with familiar Segoe UI controls and body copy.",
+      "Square, bordered panels and familiar web form controls."
+    ],
+    "rules": [
+      {
+        "name": "The Ink-and-Paper Rule",
+        "body": "Keep ink and warm paper as the principal surfaces; use amber and teal as compact record marks, reserving their deeper variants for paper-panel text.",
+        "section": "colors"
+      },
+      {
+        "name": "The Local Headline Rule",
+        "body": "Bundle IBM Plex Sans for headings; keep Segoe UI for body copy and conventional controls.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Amount Rule",
+        "body": "Use tabular numerals for displayed prices and amounts; the implementation does not use a separate monospaced typeface.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do use ink and warm paper as the primary surface contrast, with amber and teal for concise record marks.",
+      "Do keep amounts aligned with tabular numerals and preserve the square, bordered control language.",
+      "Do bundle IBM Plex Sans for headings and keep Segoe UI for body and control copy.",
+      "Do retain clear keyboard focus outlines on interactive controls.",
+      "Do theme text carets and scrollbars from the palette, and respect reduced-motion preferences."
+    ],
+    "donts": [
+      "Don't turn the single test-item catalogue into a dense multi-product storefront.",
+      "Don't introduce rounded panel or field corners, shadows, or a separate mono face as if they were established patterns.",
+      "Don't replace the bundled heading face with an unbundled system display font.",
+      "Don't use the bright accent colors as long-form body-text colors."
+    ]
+  }
+}

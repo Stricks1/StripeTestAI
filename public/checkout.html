@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101216">
+  <title>Checkout | Test Store</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="https://js.stripe.com/v3/" defer></script>
+  <script src="/assets/checkout.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="wordmark" href="/">TEST STORE <span>/ CHECKOUT</span></a>
+    <a class="header-link" href="/">Return to products</a>
+  </header>
+  <main class="checkout-layout">
+    <section class="checkout-intro">
+      <h1>Set your test amount.</h1>
+      <p class="record-code">RECORD 001 <span>/</span> PAYMENT</p>
+      <p>This dedicated checkout uses Stripe test mode. Your card details are sent directly to Stripe, not stored by this site.</p>
+      <div class="catalog-stripe" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+    </section>
+    <section class="checkout-panel">
+      <h2 id="product-name">TEST PRODUCT</h2>
+      <p class="record-code">ORDER <span>/</span> <span id="product-sku">TEST-001</span></p>
+      <p id="product-description" class="product-description">A single sample product for Stripe test payments.</p>
+      <form id="amount-form">
+        <label class="field" for="amount">Your amount (USD)
+          <div class="amount-input"><span aria-hidden="true">$</span><input id="amount" name="amount" type="number" min="0.50" max="500.00" step="0.01" value="10.00" required inputmode="decimal"></div>
+        </label>
+        <p class="field-hint">Choose between $0.50 and $500.00.</p>
+        <button id="continue-button" class="primary-button" type="submit">CONTINUE TO CARD DETAILS</button>
+      </form>
+      <section id="payment-section" hidden aria-labelledby="payment-heading">
+        <div class="payment-heading"><h3 id="payment-heading">Card details</h3><button id="edit-amount" class="text-button" type="button">Edit amount</button></div>
+        <div id="payment-element"></div>
+        <button id="pay-button" class="primary-button" type="button">PAY SECURELY</button>
+      </section>
+      <div id="checkout-message" class="notice" role="status" aria-live="polite" hidden></div>
+      <p class="panel-note">Stripe test mode only. No live charges can be made from this app.</p>
+    </section>
+  </main>
+</body>
+</html>
