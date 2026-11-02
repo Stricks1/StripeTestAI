@@ -1186,9 +1186,9 @@ async fn reserve_order(
             .collect::<Vec<_>>(),
     );
     for (&provider_id, &gross) in &provider_totals {
-        let cap = percent_allocation(gross);
         let fee_share = fee_shares.get(&provider_id).copied().unwrap_or(0);
-        let commission = cap.saturating_sub(fee_share);
+        let cap = percent_allocation(gross);
+        let commission = platform_commission(gross, fee_share);
         sqlx::query(
             "INSERT INTO order_provider_totals
                 (order_id, provider_user_id, gross_amount_cents, stripe_fee_cents,
@@ -1269,6 +1269,12 @@ fn estimate_stripe_fee(gross_cents: i64) -> i64 {
 
 fn percent_allocation(gross_cents: i64) -> i64 {
     (gross_cents * PLATFORM_ALLOCATION_BPS + 5_000) / 10_000
+}
+
+fn platform_commission(gross_cents: i64, stripe_fee_cents: i64) -> i64 {
+    percent_allocation(gross_cents)
+        .saturating_sub(stripe_fee_cents)
+        .max(0)
 }
 
 fn allocate_cents(total: i64, amounts: &[(i64, i64)]) -> BTreeMap<i64, i64> {
@@ -1716,7 +1722,7 @@ async fn update_provider_fee_allocations(
             .copied()
             .unwrap_or(0);
         let cap = percent_allocation(provider.gross_amount_cents);
-        let commission = cap.saturating_sub(fee);
+        let commission = platform_commission(provider.gross_amount_cents, fee);
         sqlx::query(
             "UPDATE order_provider_totals
              SET stripe_fee_cents = ?, platform_commission_cents = ?, provider_net_cents = ?
@@ -1960,6 +1966,13 @@ mod tests {
         assert_eq!(estimate_stripe_fee(10_000), 438);
         assert_eq!(percent_allocation(10_000), 1_000);
         assert_eq!(percent_allocation(500), 50);
+    }
+
+    #[test]
+    fn commission_is_zero_when_stripe_fee_exceeds_the_platform_cap() {
+        assert_eq!(platform_commission(500, estimate_stripe_fee(500)), 0);
+        assert_eq!(platform_commission(10_000, 1_200), 0);
+        assert_eq!(platform_commission(10_000, 438), 562);
     }
 
     #[test]
