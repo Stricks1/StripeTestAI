@@ -10,6 +10,9 @@ const {
 const providerMessage = document.querySelector("#provider-message");
 const productForm = document.querySelector("#product-form");
 const productEditor = document.querySelector("#product-editor");
+const stripeConnectStatus = document.querySelector("#stripe-connect-status");
+const stripeConnectButton = document.querySelector("#stripe-connect-button");
+const stripeDashboardButton = document.querySelector("#stripe-dashboard-button");
 
 function renderOrders(orders) {
   const body = document.querySelector("#orders-table");
@@ -121,6 +124,85 @@ async function loadProducts() {
     String(products.filter((product) => product.visible).length);
 }
 
+async function loadStripeStatus() {
+  const status = await api("/api/provider/stripe/status");
+  stripeDashboardButton.hidden = !status.has_stripe_account;
+  if (!status.stripe_configured) {
+    stripeConnectStatus.textContent =
+      "Stripe test keys are not configured on the server. Ask the administrator to configure them before connecting.";
+    stripeConnectButton.disabled = true;
+    stripeConnectButton.textContent = "STRIPE SETUP UNAVAILABLE";
+    return status;
+  }
+  if (status.transfers_enabled) {
+    stripeConnectStatus.textContent = status.payouts_enabled
+      ? "Connected. Your Stripe account can receive transfers and payouts."
+      : "Connected. Your Stripe account can receive transfers; finish any remaining payout setup with Stripe.";
+    stripeConnectButton.hidden = true;
+    return status;
+  }
+  stripeConnectButton.hidden = false;
+  stripeConnectButton.disabled = false;
+  stripeConnectButton.textContent = status.details_submitted
+    ? "CONTINUE STRIPE SETUP"
+    : "CONNECT WITH STRIPE";
+  stripeConnectStatus.textContent = status.details_submitted
+    ? "Stripe is reviewing your details or needs more information. Continue setup to see what is required."
+    : "Products appear in the customer catalog after Stripe enables transfers for your account.";
+  return status;
+}
+
+stripeConnectButton.addEventListener("click", async () => {
+  stripeConnectButton.disabled = true;
+  stripeConnectButton.textContent = "OPENING STRIPE…";
+  try {
+    const result = await api("/api/provider/stripe/connect", {
+      method: "POST",
+      body: "{}",
+    });
+    const onboardingUrl = new URL(result.url);
+    if (onboardingUrl.protocol !== "https:" || onboardingUrl.hostname !== "connect.stripe.com") {
+      throw new Error("Stripe returned an unexpected onboarding address.");
+    }
+    window.location.assign(onboardingUrl.href);
+  } catch (error) {
+    showMessage(providerMessage, error.message, "error");
+    stripeConnectButton.disabled = false;
+    try {
+      await loadStripeStatus();
+    } catch (statusError) {
+      stripeConnectStatus.textContent =
+        `Could not check your Stripe connection: ${statusError.message}`;
+    }
+  }
+});
+
+stripeDashboardButton.addEventListener("click", async () => {
+  stripeDashboardButton.disabled = true;
+  stripeDashboardButton.textContent = "OPENING STRIPE…";
+  providerMessage.hidden = true;
+  try {
+    const result = await api("/api/provider/stripe/dashboard-login", {
+      method: "POST",
+      body: "{}",
+    });
+    const loginUrl = new URL(result.url);
+    if (
+      loginUrl.protocol !== "https:" ||
+      loginUrl.hostname !== "connect.stripe.com" ||
+      !loginUrl.pathname.startsWith("/express/") ||
+      loginUrl.pathname.length <= "/express/".length
+    ) {
+      throw new Error("Stripe returned an invalid account login link.");
+    }
+    window.location.assign(loginUrl.href);
+  } catch {
+    showMessage(providerMessage, "Could not open your Stripe dashboard. Please try again later.", "error");
+    stripeDashboardButton.disabled = false;
+    stripeDashboardButton.textContent = "OPEN STRIPE DASHBOARD";
+  }
+});
+
 productForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const button = productForm.querySelector('button[type="submit"]');
@@ -182,7 +264,41 @@ async function start() {
     badge.textContent = `${dashboard.unseen_purchase_count} NEW SINCE YOUR LAST LOGIN`;
     badge.hidden = false;
   }
+  const connectResult = new URLSearchParams(window.location.search).get("stripe_connect");
+  if (connectResult === "refresh") {
+    stripeConnectStatus.textContent = "Refreshing your secure Stripe setup link.";
+    const result = await api("/api/provider/stripe/connect", {
+      method: "POST",
+      body: "{}",
+    });
+    const onboardingUrl = new URL(result.url);
+    if (onboardingUrl.protocol !== "https:" || onboardingUrl.hostname !== "connect.stripe.com") {
+      throw new Error("Stripe returned an unexpected onboarding address.");
+    }
+    window.location.replace(onboardingUrl.href);
+    return;
+  }
+  await loadStripeStatus()
+    .then((status) => {
+      if (connectResult === "return") {
+        stripeConnectStatus.textContent = status.transfers_enabled
+          ? "Stripe setup is complete. Your account is ready to receive transfers."
+          : "Stripe received your details. Transfers will be available after Stripe completes its review.";
+      }
+    })
+    .catch((error) => {
+      stripeConnectStatus.textContent = `Could not check your Stripe connection: ${error.message}`;
+      stripeConnectButton.hidden = false;
+      stripeConnectButton.disabled = false;
+      stripeConnectButton.textContent = "RETRY STRIPE SETUP";
+    });
   await loadProducts();
 }
 
-start().catch((error) => showMessage(providerMessage, error.message, "error"));
+start().catch((error) => {
+  showMessage(providerMessage, error.message, "error");
+  stripeConnectStatus.textContent = `Stripe setup could not finish: ${error.message}`;
+  stripeConnectButton.hidden = false;
+  stripeConnectButton.disabled = false;
+  stripeConnectButton.textContent = "RETRY STRIPE SETUP";
+});

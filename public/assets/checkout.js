@@ -108,8 +108,6 @@ async function pollOrderStatus() {
     lastOrder = await api(`/api/orders/${encodeURIComponent(activeOrderId)}`);
     renderOrder(lastOrder);
     if (lastOrder.status === "paid") {
-      checkoutMessage.hidden = true;
-      showCheckoutMessage("Payment confirmed by Stripe. Your order is complete.");
       try {
         const savedCheckout = JSON.parse(localStorage.getItem(checkoutStorageKey) || "null");
         if (activeCheckoutKey && savedCheckout?.checkout_key === activeCheckoutKey) {
@@ -120,7 +118,16 @@ async function pollOrderStatus() {
         showCheckoutMessage("The order is complete, but the saved cart could not be cleared.", "error");
         return;
       }
-      return;
+      if (lastOrder.provider_transfers_status === "complete") {
+        checkoutMessage.hidden = true;
+        showCheckoutMessage("Payment confirmed and provider transfers created. Your order is complete.");
+        return;
+      }
+      showCheckoutMessage(
+        "Payment confirmed. Stripe is still processing the provider transfers; this can take a moment."
+      );
+      await new Promise((resolve) => window.setTimeout(resolve, 1500));
+      continue;
     }
     if (["canceled", "failed", "refunded"].includes(lastOrder.status)) {
       showCheckoutMessage(`This order is ${lastOrder.status}. Return to the catalog to start a new checkout.`, "error");
@@ -129,9 +136,9 @@ async function pollOrderStatus() {
     await new Promise((resolve) => window.setTimeout(resolve, 1500));
   }
   if (lastOrder) {
-    showCheckoutMessage(
-      "Stripe is still confirming this order. Keep this page open or check again shortly."
-    );
+    showCheckoutMessage(lastOrder.status === "paid"
+      ? "Your payment is confirmed. Provider transfers are still processing; check back shortly."
+      : "Stripe is still confirming this order. Keep this page open or check again shortly.");
   }
 }
 

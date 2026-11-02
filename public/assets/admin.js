@@ -61,7 +61,7 @@ function renderSummary(summary) {
   feeNote.textContent =
     `${formatUsd(summary.actual_stripe_fees_cents)} actual Stripe fees · ` +
     `${formatUsd(summary.estimated_stripe_fees_cents)} estimated while Stripe settlement data is unavailable. ` +
-    "The 10% cap includes Stripe fees and platform commission. Order-level fees, refunds, and commission are prorated in product-filtered reports.";
+    "Providers receive 90% of gross; the platform keeps 10%, pays Stripe fees, and absorbs its proportional share of refunds. Order-level amounts are prorated in product-filtered reports.";
 }
 
 function renderBalance(balance, error) {

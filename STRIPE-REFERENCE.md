@@ -2,13 +2,14 @@
 
 This is a local, project-specific index to Stripe's official documentation, reviewed on 2026-11-01. It records the current marketplace integration and decisions to revisit for future payment features. Stripe's online documentation is authoritative and can change; consult the linked pages again before implementing or upgrading an integration. This file intentionally summarizes the guidance instead of copying Stripe's documentation.
 
-## Current marketplace prototype
+## Current marketplace integration
 
-- The marketplace creates a server-side PaymentIntent for each reserved customer order and uses Stripe.js Payment Element for card entry. Card details go directly to Stripe; they are not handled or stored by the application.
-- Signed webhooks confirm payments and process cancellations/refunds. The endpoint verifies Stripe signatures and stores event IDs for retry idempotency. Configure `STRIPE_WEBHOOK_SECRET`; the [README](README.md) includes Stripe CLI setup.
-- Orders, item snapshots, product stock reservations, Stripe payment identifiers, actual/estimated fees, provider allocations, and webhook event IDs are persisted in SQLite by `migrations/0002_marketplace.sql`.
+- The marketplace creates one server-side PaymentIntent per reserved order and uses Stripe.js Payment Element. Card details go directly to Stripe; the application does not handle or store them.
+- Signed webhooks confirm payments, refresh Express connected-account status, create provider transfers, and reverse transfers proportionally for full or partial refunds. Configure `STRIPE_WEBHOOK_SECRET` for both platform and connected-account events; the [README](README.md) includes Stripe CLI setup.
+- Orders, item snapshots, stock reservations, Connect account IDs, 90/10 provider allocations, transfer IDs, reversal records, payment identifiers, fee estimates, and webhook event IDs are persisted in SQLite. Migration `0003_stripe_connect.sql` adds the Connect records while preserving legacy rows.
+- Providers connect US Stripe Express accounts through Stripe-hosted onboarding. Stripe collects identity and payout information; the application does not collect or store it. Products are listed in the customer catalog only after the account's transfer capability is active.
+- The platform charges the full order, then transfers 90% of each provider's gross order value, using the original charge as the source transaction. The platform retains 10% and pays Stripe fees. Disputes and manual reconciliation remain the platform's responsibility.
 - The Rust marketplace and webhook flow lives in `src/marketplace.rs`; environment configuration is in `src/state.rs`.
-- The prototype sends customer payments to the platform's Stripe account. It does not onboard connected accounts or make provider transfers.
 
 ### Current integration documentation
 
@@ -22,22 +23,17 @@ This is a local, project-specific index to Stripe's official documentation, revi
 
 **Future review:** Stripe's current Payment Intents guidance recommends Checkout Sessions with the Payment Element for most integrations. Before expanding the custom PaymentIntent flow, compare Checkout Sessions and its fulfillment model against the marketplace's needs; it is not a drop-in API substitution.
 
-## Future payments: identify the requirement first
+## Future payments: installments and BNPL
 
-“Split payments” can mean distributing a single charge among sellers, while “installments” can mean either a lender paying the seller up front or the seller collecting a fixed number of monthly charges. These are different business and Stripe flows. Choose based on who receives funds, who bears collection risk, and the countries, currencies, and payment methods involved; do not model them as one generic payment option.
+Connected-account revenue sharing is implemented above. Installments can mean either a lender paying the seller up front or the seller collecting a fixed number of monthly charges. These are different business and Stripe flows. Choose based on who receives funds, who bears collection risk, and the countries, currencies, and payment methods involved; do not model them as one generic payment option.
 
-### Distributing a payment among sellers
+### Current marketplace fund flow
 
-For a marketplace/platform paying one or more Stripe connected accounts, review [Stripe Connect](https://docs.stripe.com/connect) and [separate charges and transfers](https://docs.stripe.com/connect/separate-charges-and-transfers). Stripe describes separate charges and transfers for cases such as splitting one payment among multiple connected accounts or when the recipient is not known at charge time. Compare it with [destination charges](https://docs.stripe.com/connect/destination-charges) when one connected account receives a payment.
+The implementation uses [separate charges and transfers](https://docs.stripe.com/connect/separate-charges-and-transfers) because one cart can contain multiple providers. Stripe receives the full PaymentIntent on the platform account; after `payment_intent.succeeded`, the app creates one transfer per provider with `source_transaction` and an order-level transfer group. Checkout distinguishes a successful customer payment from completion of all provider transfers; webhook retries reuse deterministic idempotency keys.
 
-Before designing the schema or checkout, confirm:
+The platform is responsible for Stripe processing fees, refunds, and disputes. On `charge.refunded`, the app reverses each connected account's proportional share of its transfer. Disputes do not yet trigger automated transfer reversals or dispute workflows and require platform-side handling.
 
-- Whether the platform or a seller is the merchant responsible for the charge.
-- Whether a payment can be allocated to one seller or several, and how the amounts and platform fee are calculated.
-- Which account owns refunds, disputes, Stripe fees, transfer reversals, and negative-balance risk for the chosen charge type.
-- Required connected-account onboarding, identity verification, country availability, currencies, and settlement timing.
-
-Keep the original charge, each transfer/allocation, and any reversal/refund traceable to the same order. Do not treat a successful customer charge alone as proof that all seller transfers completed.
+Providers use US Stripe Express accounts and hosted onboarding. Stripe collects identity and payout information; the application does not collect or store it.
 
 ### Letting a customer pay over time
 
@@ -51,18 +47,18 @@ Decide whether the business needs the seller to collect each installment or want
 
 ## Reliability before production use
 
-- Use [webhooks](https://docs.stripe.com/webhooks) for asynchronous and authoritative payment lifecycle updates before adding fulfillment or multi-party transfers. Verify webhook signatures, handle duplicate and out-of-order delivery safely, and persist event processing so retries are idempotent.
+- Use [webhooks](https://docs.stripe.com/webhooks) for asynchronous and authoritative payment lifecycle updates. Verify signatures, handle duplicate and out-of-order delivery safely, and persist event processing so retries are idempotent.
 - Use [idempotency keys](https://docs.stripe.com/api/idempotent_requests) for server-side create operations that may be retried.
 - Keep secrets in local environment configuration or a production secret manager. Use test-mode keys and test events while developing; never paste secret keys into chat or commit them.
 - Consult current Stripe API versions, supported regions, currencies, and method-specific requirements at implementation time.
 
 ## Marketplace allocation policy
 
-The current accounting rule caps the combined Stripe fee and platform commission at 10% of gross. Actual Stripe fees are read from the charge's expanded balance transaction when available; the dashboard labels the configured 3.99% + USD $0.39 calculation as an estimate until that data exists. Actual fees are allocated among providers proportionally to their order gross. Platform commission is the remainder of the 10% cap, floored at zero. If Stripe fees exceed the cap, the platform absorbs the excess and the provider accounting share remains 90% of gross. This is internal accounting only; no provider payout or Connect transfer occurs.
+Each provider receives 90% of its gross order total and the platform retains 10%. Stripe's actual fee is read from the charge's expanded balance transaction when available; otherwise the dashboard estimates it at 3.99% + USD $0.39. Fees are paid by the platform and do not reduce provider transfers. Full and partial refunds reverse the corresponding proportional transfer amount. The platform's estimated net is its commission less Stripe fees and its 10% share of refunds.
 
 ## Suggested reading order for the next payment feature
 
-1. Clarify whether “split” means seller/platform fund allocation, customer installments, BNPL, or more than one of these.
-2. Confirm business and customer countries, currencies, who is the seller/merchant, the number of recipients, and who bears refunds and missed-installment risk.
-3. Review the matching Stripe product docs above, then model orders, payment attempts, installment schedules or transfer allocations, and webhook events before changing checkout.
+1. Define installment count, cadence, total price, cancellation/refund policy, and handling of failed or late installments.
+2. Confirm the countries, currencies, and payment methods required for the customer and provider.
+3. Review the matching Stripe product docs above, then model payment attempts and schedules before changing checkout.
 4. Re-run the flow with Stripe test keys and CLI/webhook test events before considering live-mode setup.

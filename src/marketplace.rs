@@ -144,12 +144,36 @@ struct CheckoutProduct {
     stock_quantity: i64,
     reserved_quantity: i64,
     provider_user_id: i64,
+    stripe_account_id: String,
 }
 
 #[derive(Debug, FromRow)]
 struct ProviderGross {
     provider_user_id: i64,
     gross_amount_cents: i64,
+}
+
+#[derive(Debug, FromRow)]
+struct ProviderStripeAccount {
+    stripe_account_id: String,
+    details_submitted: bool,
+    transfers_enabled: bool,
+    payouts_enabled: bool,
+}
+
+#[derive(Debug, FromRow)]
+struct ProviderTransfer {
+    order_id: i64,
+    provider_user_id: i64,
+    stripe_account_id: Option<String>,
+    transfer_amount_cents: i64,
+    stripe_transfer_id: Option<String>,
+}
+
+#[derive(Debug, FromRow)]
+struct PendingTransferReversal {
+    target_reversed_cents: i64,
+    amount_cents: i64,
 }
 
 #[derive(Debug, FromRow)]
@@ -262,6 +286,8 @@ pub async fn customer_products(
                 u.username AS provider_name
          FROM products p
          JOIN users u ON u.id = p.provider_user_id AND u.role = 'provider'
+         JOIN provider_stripe_accounts psa
+           ON psa.provider_user_id = u.id AND psa.transfers_enabled = 1
          WHERE p.visible = 1 AND p.active = 1
            AND p.stock_quantity > p.reserved_quantity
            AND p.name LIKE ? ESCAPE '\\' COLLATE NOCASE
@@ -483,8 +509,224 @@ pub async fn provider_dashboard(
         "sales_series": series,
         "products": products,
         "recent_orders": recent_orders,
-        "accounting_note": "Sales are gross. Stripe Connect and provider payouts are not enabled in this version."
+        "accounting_note": "Providers receive 90% of gross sales through Stripe Connect. Transfers are reversed proportionally when an order is refunded."
     })))
+}
+
+pub async fn provider_stripe_status(
+    State(state): State<AppState>,
+    session: Session,
+) -> Result<impl IntoResponse, AppError> {
+    let provider_id = require_role(&session, &state.pool, "provider").await?;
+    let mut account = sqlx::query_as::<_, ProviderStripeAccount>(
+        "SELECT stripe_account_id, details_submitted, transfers_enabled, payouts_enabled
+         FROM provider_stripe_accounts WHERE provider_user_id = ?",
+    )
+    .bind(provider_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let stripe_configured = state
+        .stripe_secret_key
+        .as_deref()
+        .is_some_and(|key| key.starts_with("sk_test_"));
+
+    if stripe_configured {
+        if let Some(current) = account.as_ref() {
+            let secret_key = stripe_secret_key(&state)?;
+            let stripe_account: Value = stripe_json(
+                state
+                    .stripe_http
+                    .get(format!(
+                        "https://api.stripe.com/v1/accounts/{}",
+                        current.stripe_account_id
+                    ))
+                    .bearer_auth(secret_key),
+            )
+            .await?;
+            store_provider_stripe_status(
+                &state.pool,
+                provider_id,
+                &current.stripe_account_id,
+                &stripe_account,
+            )
+            .await?;
+            account = sqlx::query_as::<_, ProviderStripeAccount>(
+                "SELECT stripe_account_id, details_submitted, transfers_enabled, payouts_enabled
+                 FROM provider_stripe_accounts WHERE provider_user_id = ?",
+            )
+            .bind(provider_id)
+            .fetch_optional(&state.pool)
+            .await?;
+        }
+    }
+
+    let connected = account
+        .as_ref()
+        .is_some_and(|value| value.transfers_enabled);
+    Ok(Json(json!({
+        "stripe_configured": stripe_configured,
+        "has_stripe_account": account.is_some(),
+        "connected": connected,
+        "details_submitted": account.as_ref().is_some_and(|value| value.details_submitted),
+        "transfers_enabled": connected,
+        "payouts_enabled": account.as_ref().is_some_and(|value| value.payouts_enabled)
+    })))
+}
+
+pub async fn provider_stripe_connect(
+    State(state): State<AppState>,
+    session: Session,
+) -> Result<impl IntoResponse, AppError> {
+    let provider_id = require_role(&session, &state.pool, "provider").await?;
+    let secret_key = stripe_secret_key(&state)?;
+    let provider: Option<String> =
+        sqlx::query_scalar("SELECT email FROM users WHERE id = ? AND role = 'provider'")
+            .bind(provider_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let email = provider
+        .ok_or_else(|| AppError::new(StatusCode::NOT_FOUND, "Provider account was not found."))?;
+    let mut stripe_account_id: Option<String> = sqlx::query_scalar(
+        "SELECT stripe_account_id FROM provider_stripe_accounts WHERE provider_user_id = ?",
+    )
+    .bind(provider_id)
+    .fetch_optional(&state.pool)
+    .await?;
+
+    if stripe_account_id.is_none() {
+        let stripe_account: Value = stripe_json(
+            state
+                .stripe_http
+                .post("https://api.stripe.com/v1/accounts")
+                .bearer_auth(secret_key)
+                .header(
+                    "Idempotency-Key",
+                    format!("marketplace-provider-account-{provider_id}"),
+                )
+                .form(&[
+                    ("country", "US"),
+                    ("email", email.as_str()),
+                    ("controller[fees][payer]", "application"),
+                    ("controller[losses][payments]", "application"),
+                    ("controller[stripe_dashboard][type]", "express"),
+                    ("capabilities[transfers][requested]", "true"),
+                ]),
+        )
+        .await?;
+        let created_account_id = required_json_str(&stripe_account, "id")?.to_owned();
+        sqlx::query(
+            "INSERT INTO provider_stripe_accounts (provider_user_id, stripe_account_id)
+             VALUES (?, ?) ON CONFLICT(provider_user_id) DO NOTHING",
+        )
+        .bind(provider_id)
+        .bind(&created_account_id)
+        .execute(&state.pool)
+        .await?;
+        stripe_account_id = sqlx::query_scalar(
+            "SELECT stripe_account_id FROM provider_stripe_accounts WHERE provider_user_id = ?",
+        )
+        .bind(provider_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        if stripe_account_id.as_deref() != Some(created_account_id.as_str()) {
+            tracing::error!(
+                provider_id,
+                "Stored Stripe account did not match the idempotent account creation response"
+            );
+            return Err(AppError::new(
+                StatusCode::CONFLICT,
+                "A Stripe account is already linked to this provider.",
+            ));
+        }
+        store_provider_stripe_status(
+            &state.pool,
+            provider_id,
+            &created_account_id,
+            &stripe_account,
+        )
+        .await?;
+    }
+
+    let stripe_account_id = stripe_account_id
+        .ok_or_else(|| AppError::internal("The Stripe connected account could not be created."))?;
+    let base_url = state.base_url.trim_end_matches('/');
+    let refresh_url = format!("{base_url}/provider?stripe_connect=refresh");
+    let return_url = format!("{base_url}/provider?stripe_connect=return");
+    let account_link: Value = stripe_json(
+        state
+            .stripe_http
+            .post("https://api.stripe.com/v1/account_links")
+            .bearer_auth(secret_key)
+            .form(&[
+                ("account", stripe_account_id.as_str()),
+                ("refresh_url", refresh_url.as_str()),
+                ("return_url", return_url.as_str()),
+                ("type", "account_onboarding"),
+            ]),
+    )
+    .await?;
+    let url = required_json_str(&account_link, "url")?;
+    Ok(Json(json!({ "url": url })))
+}
+
+pub async fn provider_stripe_dashboard_login(
+    State(state): State<AppState>,
+    session: Session,
+) -> Result<impl IntoResponse, AppError> {
+    let provider_id = require_role(&session, &state.pool, "provider").await?;
+    let stripe_account_id: Option<String> = sqlx::query_scalar(
+        "SELECT stripe_account_id FROM provider_stripe_accounts WHERE provider_user_id = ?",
+    )
+    .bind(provider_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(stripe_account_id) = stripe_account_id else {
+        return Err(AppError::new(
+            StatusCode::NOT_FOUND,
+            "Could not open your Stripe dashboard. Please try again later.",
+        ));
+    };
+    if !stripe_account_id
+        .strip_prefix("acct_")
+        .is_some_and(|suffix| {
+            !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+    {
+        tracing::error!(provider_id, "Stored Stripe connected account ID is invalid");
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "Could not open your Stripe dashboard. Please try again later.",
+        ));
+    }
+
+    let secret_key = stripe_secret_key(&state)?;
+    let login_link: Value = stripe_json(
+        state
+            .stripe_http
+            .post(format!(
+                "https://api.stripe.com/v1/accounts/{stripe_account_id}/login_links"
+            ))
+            .bearer_auth(secret_key),
+    )
+    .await?;
+    let Some(url) = login_link.get("url").and_then(Value::as_str) else {
+        tracing::error!(
+            provider_id,
+            "Stripe account login link response did not contain a URL"
+        );
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "Could not open your Stripe dashboard. Please try again later.",
+        ));
+    };
+    if !is_stripe_express_login_url(url) {
+        tracing::error!(provider_id, "Stripe returned an invalid account login link");
+        return Err(AppError::new(
+            StatusCode::BAD_GATEWAY,
+            "Could not open your Stripe dashboard. Please try again later.",
+        ));
+    }
+    Ok(Json(json!({ "url": url })))
 }
 
 pub async fn create_order(
@@ -579,10 +821,19 @@ pub async fn order_status(
             .bind(order_id)
             .fetch_one(&state.pool)
             .await?;
+    let (transfer_count, completed_transfer_count): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COUNT(stripe_transfer_id)
+         FROM order_provider_totals
+         WHERE order_id = ? AND stripe_account_id IS NOT NULL AND provider_net_cents > 0",
+    )
+    .bind(order_id)
+    .fetch_one(&state.pool)
+    .await?;
     Ok(Json(json!({
         "order_id": order_id,
         "status": status,
         "total_amount_cents": total_amount_cents,
+        "provider_transfers_status": if transfer_count == completed_transfer_count { "complete" } else { "processing" },
         "currency": "usd",
         "items": items
     })))
@@ -764,8 +1015,9 @@ pub async fn admin_dashboard(
         ),
         Err(error) => (None, Some(error.message)),
     };
+    let platform_refund_share_cents = percent_allocation(total_refunds_cents);
     let net_after_fee_and_refunds_cents =
-        gross_sales_cents - actual_fees_cents - estimated_fees_cents - total_refunds_cents;
+        commission_cents - actual_fees_cents - estimated_fees_cents - platform_refund_share_cents;
     Ok(Json(json!({
         "period_days": days,
         "summary": {
@@ -782,7 +1034,7 @@ pub async fn admin_dashboard(
         "sales_series": series,
         "products": product_sales,
         "providers": provider_sales,
-        "commission_policy": "The platform allocation is capped at 10% of gross. Actual Stripe fees are counted first; the platform absorbs fees above that cap."
+        "commission_policy": "Providers receive 90% of gross through Stripe Connect. The platform keeps 10%, pays Stripe processing fees, and absorbs its proportional share of refunds."
     })))
 }
 
@@ -846,6 +1098,9 @@ pub async fn stripe_webhook(
         }
         "charge.refunded" => {
             apply_charge_refund(&state, event_id, event_type, object).await?;
+        }
+        "account.updated" => {
+            apply_connect_account_updated(&state, event_id, event_type, object).await?;
         }
         _ => {
             record_webhook_event(&state.pool, event_id, event_type).await?;
@@ -945,6 +1200,25 @@ async fn ensure_order_payment(state: &AppState, order_id: i64) -> Result<Ensured
             "This order is no longer available for payment.",
         ));
     }
+    let (provider_count, allocated_provider_count): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT i.provider_user_id),
+                COUNT(DISTINCT CASE
+                    WHEN opt.stripe_account_id IS NOT NULL AND opt.provider_net_cents > 0
+                    THEN opt.provider_user_id END)
+         FROM order_items i
+         LEFT JOIN order_provider_totals opt
+           ON opt.order_id = i.order_id AND opt.provider_user_id = i.provider_user_id
+         WHERE i.order_id = ?",
+    )
+    .bind(order_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if provider_count == 0 || provider_count != allocated_provider_count {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "This checkout does not have connected payout details. Return to the catalog and start a new checkout.",
+        ));
+    }
     let (secret_key, publishable_key) = stripe_test_keys(state)?;
     let existing = sqlx::query_as::<_, OrderPayment>(
         "SELECT id, stripe_payment_intent_id, amount_cents, currency
@@ -984,6 +1258,7 @@ async fn ensure_order_payment(state: &AppState, order_id: i64) -> Result<Ensured
 
     let amount = order.total_amount_cents.to_string();
     let order_id_string = order.id.to_string();
+    let transfer_group = format!("ORDER_{}", order.id);
     let idempotency_key = format!("marketplace-order-{}", order.id);
     let intent: Value = stripe_json(
         state
@@ -1000,6 +1275,7 @@ async fn ensure_order_payment(state: &AppState, order_id: i64) -> Result<Ensured
                     "any",
                 ),
                 ("metadata[order_id]", order_id_string.as_str()),
+                ("transfer_group", transfer_group.as_str()),
             ]),
     )
     .await?;
@@ -1087,9 +1363,12 @@ async fn reserve_order(
     for (&product_id, &quantity) in cart {
         let product = sqlx::query_as::<_, CheckoutProduct>(
             "SELECT p.id, p.sku, p.name, p.base_price_cents,
-                    p.stock_quantity, p.reserved_quantity, p.provider_user_id
+                    p.stock_quantity, p.reserved_quantity, p.provider_user_id,
+                    psa.stripe_account_id
              FROM products p
              JOIN users u ON u.id = p.provider_user_id AND u.role = 'provider'
+             JOIN provider_stripe_accounts psa
+               ON psa.provider_user_id = u.id AND psa.transfers_enabled = 1
              WHERE p.id = ? AND p.visible = 1 AND p.active = 1",
         )
         .bind(product_id)
@@ -1127,7 +1406,7 @@ async fn reserve_order(
     .await?;
     let order_id = order_result.last_insert_rowid();
     let reservation_expires_at = unix_now()? + INVENTORY_RESERVATION_SECONDS;
-    let mut provider_totals = BTreeMap::<i64, i64>::new();
+    let mut provider_totals = BTreeMap::<i64, (i64, String)>::new();
     for (product, quantity, line_total) in &products {
         let reserved = sqlx::query(
             "UPDATE products
@@ -1172,35 +1451,37 @@ async fn reserve_order(
         .bind(reservation_expires_at)
         .execute(&mut *transaction)
         .await?;
-        let entry = provider_totals.entry(product.provider_user_id).or_default();
-        *entry = entry
+        let entry = provider_totals
+            .entry(product.provider_user_id)
+            .or_insert((0, product.stripe_account_id.clone()));
+        entry.0 = entry
+            .0
             .checked_add(*line_total)
             .ok_or_else(|| AppError::bad_request("The cart total is too large."))?;
     }
     let estimated_fee = estimate_stripe_fee(total);
-    let fee_shares = allocate_cents(
-        estimated_fee,
-        &provider_totals
-            .iter()
-            .map(|(id, gross)| (*id, *gross))
-            .collect::<Vec<_>>(),
-    );
-    for (&provider_id, &gross) in &provider_totals {
+    let provider_gross: Vec<_> = provider_totals
+        .iter()
+        .map(|(id, (gross, _))| (*id, *gross))
+        .collect();
+    let fee_shares = allocate_cents(estimated_fee, &provider_gross);
+    for (&provider_id, (gross, stripe_account_id)) in &provider_totals {
         let fee_share = fee_shares.get(&provider_id).copied().unwrap_or(0);
-        let cap = percent_allocation(gross);
-        let commission = platform_commission(gross, fee_share);
+        let cap = percent_allocation(*gross);
+        let provider_transfer = provider_share_amount(*gross);
         sqlx::query(
             "INSERT INTO order_provider_totals
                 (order_id, provider_user_id, gross_amount_cents, stripe_fee_cents,
-                 platform_commission_cents, provider_net_cents)
-             VALUES (?, ?, ?, ?, ?, ?)",
+                 platform_commission_cents, provider_net_cents, stripe_account_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(order_id)
         .bind(provider_id)
         .bind(gross)
         .bind(fee_share)
-        .bind(commission)
-        .bind(gross - cap)
+        .bind(cap)
+        .bind(provider_transfer)
+        .bind(stripe_account_id)
         .execute(&mut *transaction)
         .await?;
     }
@@ -1271,10 +1552,8 @@ fn percent_allocation(gross_cents: i64) -> i64 {
     (gross_cents * PLATFORM_ALLOCATION_BPS + 5_000) / 10_000
 }
 
-fn platform_commission(gross_cents: i64, stripe_fee_cents: i64) -> i64 {
-    percent_allocation(gross_cents)
-        .saturating_sub(stripe_fee_cents)
-        .max(0)
+fn provider_share_amount(gross_cents: i64) -> i64 {
+    gross_cents - percent_allocation(gross_cents)
 }
 
 fn allocate_cents(total: i64, amounts: &[(i64, i64)]) -> BTreeMap<i64, i64> {
@@ -1306,6 +1585,9 @@ async fn apply_payment_intent_success(
     event_type: &str,
     object: &Value,
 ) -> Result<(), AppError> {
+    if webhook_event_processed(&state.pool, event_id).await? {
+        return Ok(());
+    }
     let intent_id = required_json_str(object, "id")?;
     let amount = object
         .get("amount")
@@ -1327,9 +1609,6 @@ async fn apply_payment_intent_success(
     };
 
     let mut transaction = state.pool.begin().await?;
-    if !insert_webhook_event(&mut transaction, event_id, event_type).await? {
-        return Ok(());
-    }
     let payment = sqlx::query_as::<_, WebhookPaymentRecord>(
         "SELECT id, order_id, amount_cents, currency, stripe_charge_id, refunded_amount_cents
          FROM stripe_payments WHERE stripe_payment_intent_id = ?",
@@ -1343,6 +1622,7 @@ async fn apply_payment_intent_success(
             "Ignoring an unrelated Stripe PaymentIntent"
         );
         transaction.commit().await?;
+        record_webhook_event(&state.pool, event_id, event_type).await?;
         return Ok(());
     };
     if payment.amount_cents != amount || payment.currency != currency {
@@ -1375,6 +1655,29 @@ async fn apply_payment_intent_success(
             "The order is no longer active; payment requires manual reconciliation.",
         ));
     }
+    let (provider_count, allocated_provider_count): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT i.provider_user_id),
+                COUNT(DISTINCT CASE
+                    WHEN opt.stripe_account_id IS NOT NULL AND opt.provider_net_cents > 0
+                    THEN opt.provider_user_id END)
+         FROM order_items i
+         LEFT JOIN order_provider_totals opt
+           ON opt.order_id = i.order_id AND opt.provider_user_id = i.provider_user_id
+         WHERE i.order_id = ?",
+    )
+    .bind(order.id)
+    .fetch_one(&mut *transaction)
+    .await?;
+    if provider_count == 0 || provider_count != allocated_provider_count {
+        tracing::error!(
+            order_id = order.id,
+            "Paid Stripe order has no complete connected payout allocation"
+        );
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "The order is missing connected payout details and requires manual reconciliation.",
+        ));
+    }
     let (charge_id, balance_transaction_id, actual_fee) = charge_data
         .map(|data| (data.charge_id, data.balance_transaction_id, data.fee_cents))
         .unwrap_or((None, None, None));
@@ -1390,8 +1693,8 @@ async fn apply_payment_intent_success(
              stripe_fee_cents = COALESCE(?, stripe_fee_cents), updated_at = unixepoch()
          WHERE id = ?",
     )
-    .bind(charge_id)
-    .bind(balance_transaction_id)
+    .bind(charge_id.as_deref())
+    .bind(balance_transaction_id.as_deref())
     .bind(actual_fee)
     .bind(payment.id)
     .execute(&mut *transaction)
@@ -1408,12 +1711,267 @@ async fn apply_payment_intent_success(
         .execute(&mut *transaction)
         .await?;
         consume_order_reservations(&mut transaction, order.id).await?;
-        if let Some(fee_cents) = actual_fee {
-            update_provider_fee_allocations(&mut transaction, order.id, fee_cents).await?;
-        }
+    }
+    if let Some(fee_cents) = actual_fee {
+        update_provider_fee_allocations(&mut transaction, order.id, fee_cents).await?;
     }
     transaction.commit().await?;
+    reconcile_provider_transfers(state, order.id, charge_id.as_deref(), true).await?;
+    record_webhook_event(&state.pool, event_id, event_type).await?;
     Ok(())
+}
+
+async fn webhook_event_processed(
+    pool: &sqlx::SqlitePool,
+    event_id: &str,
+) -> Result<bool, AppError> {
+    let processed: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stripe_webhook_events WHERE event_id = ?)")
+            .bind(event_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(processed)
+}
+
+async fn reconcile_provider_transfers(
+    state: &AppState,
+    order_id: i64,
+    charge_id: Option<&str>,
+    create_missing: bool,
+) -> Result<(), AppError> {
+    let payment: Option<(i64, i64)> = sqlx::query_as(
+        "SELECT amount_cents, refunded_amount_cents
+         FROM stripe_payments WHERE order_id = ?",
+    )
+    .bind(order_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((payment_amount_cents, refunded_amount_cents)) = payment else {
+        return Ok(());
+    };
+    let transfers = sqlx::query_as::<_, ProviderTransfer>(
+        "SELECT order_id, provider_user_id, stripe_account_id,
+                provider_net_cents AS transfer_amount_cents, stripe_transfer_id
+         FROM order_provider_totals
+         WHERE order_id = ? AND stripe_account_id IS NOT NULL AND provider_net_cents > 0
+         ORDER BY provider_user_id",
+    )
+    .bind(order_id)
+    .fetch_all(&state.pool)
+    .await?;
+    if transfers.is_empty() {
+        return Ok(());
+    }
+
+    for transfer in transfers {
+        let transfer_id = match transfer.stripe_transfer_id.clone() {
+            Some(id) => id,
+            None if !create_missing => continue,
+            None => {
+                let charge_id = charge_id.ok_or_else(|| {
+                    AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "Stripe confirmed payment without a charge reference; provider transfers are pending.",
+                    )
+                })?;
+                let account_id = transfer.stripe_account_id.as_deref().ok_or_else(|| {
+                    AppError::new(
+                        StatusCode::CONFLICT,
+                        "The provider connected account for this order is missing.",
+                    )
+                })?;
+                let secret_key = stripe_secret_key(state)?;
+                let amount = transfer.transfer_amount_cents.to_string();
+                let order_group = format!("ORDER_{}", transfer.order_id);
+                let order_metadata = transfer.order_id.to_string();
+                let idempotency_key = format!(
+                    "marketplace-transfer-order-{}-provider-{}",
+                    transfer.order_id, transfer.provider_user_id
+                );
+                let stripe_transfer: Value = stripe_json(
+                    state
+                        .stripe_http
+                        .post("https://api.stripe.com/v1/transfers")
+                        .bearer_auth(secret_key)
+                        .header("Idempotency-Key", idempotency_key)
+                        .form(&[
+                            ("amount", amount.as_str()),
+                            ("currency", "usd"),
+                            ("destination", account_id),
+                            ("source_transaction", charge_id),
+                            ("transfer_group", order_group.as_str()),
+                            ("metadata[order_id]", order_metadata.as_str()),
+                        ]),
+                )
+                .await?;
+                let created_id = required_json_str(&stripe_transfer, "id")?;
+                let created_amount = stripe_transfer.get("amount").and_then(Value::as_i64);
+                let destination = stripe_transfer.get("destination").and_then(Value::as_str);
+                if created_amount != Some(transfer.transfer_amount_cents)
+                    || destination != Some(account_id)
+                {
+                    tracing::error!(
+                        order_id = transfer.order_id,
+                        provider_id = transfer.provider_user_id,
+                        "Stripe transfer did not match the stored provider allocation"
+                    );
+                    return Err(AppError::new(
+                        StatusCode::BAD_GATEWAY,
+                        "Stripe returned a transfer that did not match this order.",
+                    ));
+                }
+                let update = sqlx::query(
+                    "UPDATE order_provider_totals
+                     SET stripe_transfer_id = ?
+                     WHERE order_id = ? AND provider_user_id = ? AND stripe_account_id = ?
+                       AND (stripe_transfer_id IS NULL OR stripe_transfer_id = ?)",
+                )
+                .bind(created_id)
+                .bind(transfer.order_id)
+                .bind(transfer.provider_user_id)
+                .bind(account_id)
+                .bind(created_id)
+                .execute(&state.pool)
+                .await?;
+                if update.rows_affected() != 1 {
+                    return Err(AppError::new(
+                        StatusCode::CONFLICT,
+                        "The provider transfer could not be matched to its order.",
+                    ));
+                }
+                created_id.to_owned()
+            }
+        };
+        reconcile_provider_transfer_reversals(
+            state,
+            &transfer,
+            &transfer_id,
+            payment_amount_cents,
+            refunded_amount_cents,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+async fn reconcile_provider_transfer_reversals(
+    state: &AppState,
+    transfer: &ProviderTransfer,
+    transfer_id: &str,
+    payment_amount_cents: i64,
+    refunded_amount_cents: i64,
+) -> Result<(), AppError> {
+    let target_reversed_cents = proportional_amount(
+        transfer.transfer_amount_cents,
+        refunded_amount_cents,
+        payment_amount_cents,
+    );
+    if target_reversed_cents > 0 {
+        let mut transaction = state.pool.begin().await?;
+        let reserved_cents: i64 = sqlx::query_scalar(
+            "SELECT COALESCE(SUM(amount_cents), 0)
+             FROM provider_transfer_reversals
+             WHERE order_id = ? AND provider_user_id = ?",
+        )
+        .bind(transfer.order_id)
+        .bind(transfer.provider_user_id)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if target_reversed_cents > reserved_cents {
+            sqlx::query(
+                "INSERT INTO provider_transfer_reversals
+                    (order_id, provider_user_id, target_reversed_cents, amount_cents)
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(order_id, provider_user_id, target_reversed_cents) DO NOTHING",
+            )
+            .bind(transfer.order_id)
+            .bind(transfer.provider_user_id)
+            .bind(target_reversed_cents)
+            .bind(target_reversed_cents - reserved_cents)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        let pending = sqlx::query_as::<_, PendingTransferReversal>(
+            "SELECT target_reversed_cents, amount_cents
+             FROM provider_transfer_reversals
+             WHERE order_id = ? AND provider_user_id = ? AND status = 'pending'
+             ORDER BY target_reversed_cents",
+        )
+        .bind(transfer.order_id)
+        .bind(transfer.provider_user_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+        transaction.commit().await?;
+
+        for reversal in pending {
+            let secret_key = stripe_secret_key(state)?;
+            let amount = reversal.amount_cents.to_string();
+            let order_id = transfer.order_id.to_string();
+            let idempotency_key = format!(
+                "marketplace-reversal-order-{}-provider-{}-target-{}",
+                transfer.order_id, transfer.provider_user_id, reversal.target_reversed_cents
+            );
+            let stripe_reversal: Value = stripe_json(
+                state
+                    .stripe_http
+                    .post(format!(
+                        "https://api.stripe.com/v1/transfers/{transfer_id}/reversals"
+                    ))
+                    .bearer_auth(secret_key)
+                    .header("Idempotency-Key", idempotency_key)
+                    .form(&[
+                        ("amount", amount.as_str()),
+                        ("metadata[order_id]", order_id.as_str()),
+                    ]),
+            )
+            .await?;
+            let reversal_id = required_json_str(&stripe_reversal, "id")?;
+            if stripe_reversal.get("amount").and_then(Value::as_i64) != Some(reversal.amount_cents)
+            {
+                tracing::error!(
+                    order_id = transfer.order_id,
+                    provider_id = transfer.provider_user_id,
+                    "Stripe transfer reversal did not match the requested refund allocation"
+                );
+                return Err(AppError::new(
+                    StatusCode::BAD_GATEWAY,
+                    "Stripe returned a transfer reversal that did not match this refund.",
+                ));
+            }
+            let mut transaction = state.pool.begin().await?;
+            sqlx::query(
+                "UPDATE provider_transfer_reversals
+                 SET stripe_reversal_id = ?, status = 'reversed', updated_at = unixepoch()
+                 WHERE order_id = ? AND provider_user_id = ? AND target_reversed_cents = ?",
+            )
+            .bind(reversal_id)
+            .bind(transfer.order_id)
+            .bind(transfer.provider_user_id)
+            .bind(reversal.target_reversed_cents)
+            .execute(&mut *transaction)
+            .await?;
+            sqlx::query(
+                "UPDATE order_provider_totals
+                 SET stripe_transfer_reversed_cents =
+                     MAX(stripe_transfer_reversed_cents, ?)
+                 WHERE order_id = ? AND provider_user_id = ?",
+            )
+            .bind(reversal.target_reversed_cents)
+            .bind(transfer.order_id)
+            .bind(transfer.provider_user_id)
+            .execute(&mut *transaction)
+            .await?;
+            transaction.commit().await?;
+        }
+    }
+    Ok(())
+}
+
+fn proportional_amount(total_cents: i64, part_cents: i64, whole_cents: i64) -> i64 {
+    if total_cents <= 0 || part_cents <= 0 || whole_cents <= 0 {
+        return 0;
+    }
+    ((total_cents * part_cents + whole_cents / 2) / whole_cents).min(total_cents)
 }
 
 async fn apply_payment_intent_status(
@@ -1473,12 +2031,43 @@ async fn apply_payment_intent_canceled(
     Ok(())
 }
 
+async fn apply_connect_account_updated(
+    state: &AppState,
+    event_id: &str,
+    event_type: &str,
+    object: &Value,
+) -> Result<(), AppError> {
+    if webhook_event_processed(&state.pool, event_id).await? {
+        return Ok(());
+    }
+    let account_id = required_json_str(object, "id")?;
+    let provider_id: Option<i64> = sqlx::query_scalar(
+        "SELECT provider_user_id FROM provider_stripe_accounts WHERE stripe_account_id = ?",
+    )
+    .bind(account_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some(provider_id) = provider_id {
+        store_provider_stripe_status(&state.pool, provider_id, account_id, object).await?;
+    } else {
+        tracing::warn!(
+            stripe_account_id = account_id,
+            "Ignoring an unlinked Stripe connected account update"
+        );
+    }
+    record_webhook_event(&state.pool, event_id, event_type).await?;
+    Ok(())
+}
+
 async fn apply_charge_refund(
     state: &AppState,
     event_id: &str,
     event_type: &str,
     object: &Value,
 ) -> Result<(), AppError> {
+    if webhook_event_processed(&state.pool, event_id).await? {
+        return Ok(());
+    }
     let charge_id = required_json_str(object, "id")?;
     let refunded = object
         .get("amount_refunded")
@@ -1499,9 +2088,6 @@ async fn apply_charge_refund(
             .or_else(|| value.get("id").and_then(Value::as_str))
     });
     let mut transaction = state.pool.begin().await?;
-    if !insert_webhook_event(&mut transaction, event_id, event_type).await? {
-        return Ok(());
-    }
     let payments: Vec<WebhookPaymentRecord> = sqlx::query_as(
         "SELECT id, order_id, amount_cents, currency, stripe_charge_id, refunded_amount_cents
          FROM stripe_payments
@@ -1512,6 +2098,7 @@ async fn apply_charge_refund(
     .bind(payment_intent_id)
     .fetch_all(&mut *transaction)
     .await?;
+    let mut matched_order_id = None;
     if payments.len() > 1 {
         return Err(AppError::new(
             StatusCode::CONFLICT,
@@ -1552,6 +2139,7 @@ async fn apply_charge_refund(
         .bind(payment.id)
         .execute(&mut *transaction)
         .await?;
+        matched_order_id = Some(payment.order_id);
         sqlx::query(
             "UPDATE orders SET status = ?, paid_at = COALESCE(paid_at, unixepoch()),
                 updated_at = unixepoch() WHERE id = ?",
@@ -1562,6 +2150,10 @@ async fn apply_charge_refund(
         .await?;
     }
     transaction.commit().await?;
+    if let Some(order_id) = matched_order_id {
+        reconcile_provider_transfers(state, order_id, Some(charge_id), false).await?;
+    }
+    record_webhook_event(&state.pool, event_id, event_type).await?;
     Ok(())
 }
 
@@ -1721,16 +2313,12 @@ async fn update_provider_fee_allocations(
             .get(&provider.provider_user_id)
             .copied()
             .unwrap_or(0);
-        let cap = percent_allocation(provider.gross_amount_cents);
-        let commission = platform_commission(provider.gross_amount_cents, fee);
         sqlx::query(
             "UPDATE order_provider_totals
-             SET stripe_fee_cents = ?, platform_commission_cents = ?, provider_net_cents = ?
+             SET stripe_fee_cents = ?
              WHERE order_id = ? AND provider_user_id = ?",
         )
         .bind(fee)
-        .bind(commission)
-        .bind(provider.gross_amount_cents - cap)
         .bind(order_id)
         .bind(provider.provider_user_id)
         .execute(&mut **transaction)
@@ -1866,6 +2454,63 @@ async fn stripe_json<T: serde::de::DeserializeOwned>(
     })
 }
 
+async fn store_provider_stripe_status(
+    pool: &sqlx::SqlitePool,
+    provider_id: i64,
+    expected_account_id: &str,
+    account: &Value,
+) -> Result<(), AppError> {
+    let account_id = required_json_str(account, "id")?;
+    let details_submitted = account
+        .get("details_submitted")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "Stripe returned an invalid connected-account status.",
+            )
+        })?;
+    let payouts_enabled = account
+        .get("payouts_enabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            AppError::new(
+                StatusCode::BAD_GATEWAY,
+                "Stripe returned an invalid connected-account status.",
+            )
+        })?;
+    let transfers_enabled = account
+        .pointer("/capabilities/transfers")
+        .and_then(Value::as_str)
+        == Some("active");
+    if account_id != expected_account_id {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "Stripe returned a different connected account than expected.",
+        ));
+    }
+    let update = sqlx::query(
+        "UPDATE provider_stripe_accounts
+         SET details_submitted = ?, transfers_enabled = ?, payouts_enabled = ?,
+             updated_at = unixepoch()
+         WHERE provider_user_id = ? AND stripe_account_id = ?",
+    )
+    .bind(details_submitted)
+    .bind(transfers_enabled)
+    .bind(payouts_enabled)
+    .bind(provider_id)
+    .bind(expected_account_id)
+    .execute(pool)
+    .await?;
+    if update.rows_affected() != 1 {
+        return Err(AppError::new(
+            StatusCode::CONFLICT,
+            "The connected account is no longer linked to this provider.",
+        ));
+    }
+    Ok(())
+}
+
 fn verify_stripe_signature(
     secret: &str,
     header: &str,
@@ -1947,6 +2592,17 @@ fn required_json_str<'a>(value: &'a Value, key: &str) -> Result<&'a str, AppErro
         .ok_or_else(|| AppError::bad_request(format!("Stripe event field {key} is missing.")))
 }
 
+fn is_stripe_express_login_url(value: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    url.scheme() == "https"
+        && url.host_str() == Some("connect.stripe.com")
+        && url.path().strip_prefix("/express/").is_some_and(|path| {
+            !path.is_empty() && path.split('/').all(|segment| !segment.is_empty())
+        })
+}
+
 fn unix_now() -> Result<i64, AppError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1969,10 +2625,18 @@ mod tests {
     }
 
     #[test]
-    fn commission_is_zero_when_stripe_fee_exceeds_the_platform_cap() {
-        assert_eq!(platform_commission(500, estimate_stripe_fee(500)), 0);
-        assert_eq!(platform_commission(10_000, 1_200), 0);
-        assert_eq!(platform_commission(10_000, 438), 562);
+    fn provider_share_is_ninety_percent_of_gross() {
+        assert_eq!(provider_share_amount(10_000), 9_000);
+        assert_eq!(percent_allocation(10_000), 1_000);
+        assert_eq!(provider_share_amount(100), 90);
+    }
+
+    #[test]
+    fn refund_reversals_are_proportional_and_capped() {
+        assert_eq!(proportional_amount(9_000, 5_000, 10_000), 4_500);
+        assert_eq!(proportional_amount(9_000, 10_000, 10_000), 9_000);
+        assert_eq!(proportional_amount(9_000, 12_000, 10_000), 9_000);
+        assert_eq!(proportional_amount(9_000, 0, 10_000), 0);
     }
 
     #[test]
@@ -2000,5 +2664,21 @@ mod tests {
         assert!(verify_stripe_signature(secret, &header, body, timestamp).is_ok());
         assert!(verify_stripe_signature(secret, &header, body, timestamp + 301).is_err());
         assert!(verify_stripe_signature(secret, &header, b"tampered", timestamp).is_err());
+    }
+
+    #[test]
+    fn accepts_only_stripe_express_account_login_links() {
+        assert!(is_stripe_express_login_url(
+            "https://connect.stripe.com/express/acct_123/temporary-token"
+        ));
+        assert!(!is_stripe_express_login_url(
+            "https://example.com/express/temporary-token"
+        ));
+        assert!(!is_stripe_express_login_url(
+            "http://connect.stripe.com/express/temporary-token"
+        ));
+        assert!(!is_stripe_express_login_url(
+            "https://connect.stripe.com/express/"
+        ));
     }
 }

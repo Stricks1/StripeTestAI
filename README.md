@@ -1,6 +1,6 @@
 # Stripe Test Marketplace
 
-A local Rust/Axum and SQLite marketplace prototype with customer, provider, and admin workspaces. Stripe test-mode payments are handled through PaymentIntents and Stripe.js Payment Element.
+A local Rust/Axum and SQLite marketplace prototype with customer, provider, and admin workspaces. Stripe test-mode payments use PaymentIntents, Stripe.js Payment Element, and Stripe Connect transfers.
 
 ## Run locally
 
@@ -25,28 +25,34 @@ The first development start creates the SQLite database and an `admin` / `admin`
 ## Roles and marketplace flow
 
 - **Admin:** sign in with the seeded development account to view platform sales, products, provider totals, and the Stripe test-account balance.
-- **Provider:** register and confirm a provider account, then create, edit, or archive products. Products have a fixed USD price and stock quantity. Archive only hides a product; it does not delete product, order, or payment history.
+- **Provider:** register and confirm a provider account, then connect a US Stripe account from the provider overview. Stripe-hosted Express onboarding collects identity and payout details. Products appear in the customer catalog after Stripe enables transfers. Providers can then create, edit, or archive products.
 - **Customer:** register and confirm a customer account, browse and filter the catalog, select quantities, and pay for the cart.
 
 Stripe Payment Element sends card details directly to Stripe. The application server does not receive or store card numbers. The server requests 3D Secure when supported; Stripe and the card issuer decide whether a challenge is required.
 
+## Stripe Connect split payments
+
+The platform creates one PaymentIntent for the full customer order. After Stripe confirms payment by webhook, the server creates an idempotent transfer for **90% of each provider's gross order total** to that provider's connected account; the platform retains 10%. Carts can include products from multiple providers. Stripe processing fees are paid by the platform and do not reduce the provider's 90% share.
+
+The platform owns the original charge. Full and partial `charge.refunded` events trigger proportional, idempotent reversals of provider transfers. Disputes and any manual reconciliation remain the platform's responsibility. Providers can open their Express dashboard from the provider workspace; each click requests a fresh, temporary login link from Stripe. The provider dashboard reports gross sales; Stripe controls when transferred funds are paid out to a provider's bank.
+
+In development, the app seeds `provider3` / `provider3` and an `A DOLLAR` USD $1.00 product. Sign in as that provider, select **Connect with Stripe**, and complete onboarding with Stripe test data. This fixture is development-only; it does not create a connected account or bypass Stripe verification until the provider starts and completes the hosted onboarding flow.
+
 ## Stripe webhooks and inventory
 
-Payment fulfillment is confirmed by a signed Stripe webhook. For local development, install the [Stripe CLI](https://docs.stripe.com/stripe-cli), then in a second terminal run:
+Payment fulfillment, connected-account status, transfers, and refund reversals are processed from signed Stripe webhooks. For local development, install the [Stripe CLI](https://docs.stripe.com/stripe-cli), then in a second terminal run:
 
 ```powershell
-stripe listen --forward-to http://127.0.0.1:3000/api/stripe/webhook
+stripe listen --forward-to http://127.0.0.1:3000/api/stripe/webhook --forward-connect-to http://127.0.0.1:3000/api/stripe/webhook
 ```
 
-Copy the `whsec_...` signing secret printed by the CLI into `STRIPE_WEBHOOK_SECRET` in `.env`, then restart the app. Do not use a webhook signing secret from a different listener. The server verifies webhook signatures, rejects stale signatures, and records event IDs to make webhook retries idempotent.
+Copy the `whsec_...` signing secret printed by this combined CLI listener into `STRIPE_WEBHOOK_SECRET` in `.env`, then restart the app. Do not use a webhook signing secret from a different listener. The server verifies webhook signatures, rejects stale signatures, and records event IDs to make webhook retries idempotent. Connect must be enabled for the platform's Stripe test account.
 
 Checkout reserves stock for 30 minutes. Confirmed cancellation releases the reservation; a failed Stripe cancellation leaves stock reserved rather than risking overselling. Refunds are recorded, but refunded stock is not automatically restocked.
 
 ## Accounting rules
 
-The platform's allocation cap is **10% of gross total**, shared between Stripe fees and platform commission; it is not an extra 10% on top of Stripe's fee. Stripe's actual fee is used when its balance transaction is available. Until then, the dashboard marks the estimate based on **3.99% + USD $0.39**. If the actual Stripe fee exceeds 10% of gross, platform commission becomes zero and the platform absorbs the excess; the provider's recorded gross share remains 90%. Provider dashboards show gross sales only.
-
-Payments currently go to the platform's Stripe account. Stripe Connect onboarding, transfers/provider payouts, subscriptions, and customer installment plans are not implemented. See [STRIPE-REFERENCE.md](STRIPE-REFERENCE.md) before planning those features.
+The platform's commission is **10% of gross** and the provider transfer is **90% of gross**. Stripe's actual fee is used when its balance transaction is available; until then the admin dashboard estimates it at **3.99% + USD $0.39**. The platform pays that fee from its commission and absorbs any shortfall. Subscriptions and customer installment plans are not implemented. See [STRIPE-REFERENCE.md](STRIPE-REFERENCE.md) for Stripe integration notes.
 
 ## Email delivery
 

@@ -44,6 +44,9 @@ async fn main() -> Result<()> {
         .await
         .context("Could not apply database migrations")?;
     seed_admin(&pool).await?;
+    if env::var("APP_ENV").unwrap_or_else(|_| "development".to_owned()) == "development" {
+        seed_provider3(&pool).await?;
+    }
 
     let state = state::AppState::from_env(pool.clone())?;
     let secure_cookie = state.app_env != "development";
@@ -80,6 +83,18 @@ async fn main() -> Result<()> {
         .route(
             "/api/provider/dashboard",
             get(marketplace::provider_dashboard),
+        )
+        .route(
+            "/api/provider/stripe/status",
+            get(marketplace::provider_stripe_status),
+        )
+        .route(
+            "/api/provider/stripe/connect",
+            post(marketplace::provider_stripe_connect),
+        )
+        .route(
+            "/api/provider/stripe/dashboard-login",
+            post(marketplace::provider_stripe_dashboard_login),
         )
         .route("/api/admin/filters", get(marketplace::admin_filter_options))
         .route("/api/admin/dashboard", get(marketplace::admin_dashboard))
@@ -145,6 +160,64 @@ async fn seed_admin(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+async fn seed_provider3(pool: &SqlitePool) -> Result<()> {
+    let existing: Option<(i64, String)> =
+        sqlx::query_as("SELECT id, role FROM users WHERE username = 'provider3' COLLATE NOCASE")
+            .fetch_optional(pool)
+            .await
+            .context("Could not check for the development provider account")?;
+    let provider_id = if let Some((id, role)) = existing {
+        if role != "provider" {
+            anyhow::bail!("The development provider3 account exists with a non-provider role");
+        }
+        id
+    } else {
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = Argon2::default()
+            .hash_password(b"provider3", &salt)
+            .map_err(|error| {
+                anyhow::anyhow!("Could not hash the development provider password: {error}")
+            })?
+            .to_string();
+        sqlx::query(
+            "INSERT INTO users
+                (username, email, password_hash, email_verified, role)
+             VALUES ('provider3', 'provider3@example.com', ?, 1, 'provider')",
+        )
+        .bind(password_hash)
+        .execute(pool)
+        .await
+        .context("Could not create the development provider account")?
+        .last_insert_rowid()
+    };
+
+    let product_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM products WHERE sku = 'PROVIDER3-001' AND provider_user_id = ?
+         )",
+    )
+    .bind(provider_id)
+    .fetch_one(pool)
+    .await
+    .context("Could not check the development provider product")?;
+    if !product_exists {
+        sqlx::query(
+            "INSERT INTO products
+                (sku, name, description, base_price_cents, provider_user_id,
+                 visible, active, stock_quantity)
+             VALUES ('PROVIDER3-001', 'A DOLLAR',
+                     'A one-dollar product for Stripe Connect test checkout.',
+                     100, ?, 1, 1, 1000)",
+        )
+        .bind(provider_id)
+        .execute(pool)
+        .await
+        .context("Could not create the development provider product")?;
+    }
+    tracing::info!("Development provider account ready (provider3/provider3)");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +265,13 @@ mod tests {
             .execute(&pool)
             .await
             .expect("marketplace migration should apply");
+        sqlx::raw_sql(include_str!("../migrations/0003_stripe_connect.sql"))
+            .execute(&pool)
+            .await
+            .expect("Stripe Connect migration should apply");
+        seed_provider3(&pool)
+            .await
+            .expect("development provider fixture should seed");
 
         let admin_role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = 1")
             .fetch_one(&pool)
@@ -209,5 +289,24 @@ mod tests {
         assert_eq!(admin_role, "admin");
         assert!(!product_visible);
         assert_eq!(legacy_payments, 1);
+
+        let provider: (String, String, bool) = sqlx::query_as(
+            "SELECT username, role, email_verified FROM users WHERE username = 'provider3'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("development provider should be available");
+        let product: (String, i64, i64) = sqlx::query_as(
+            "SELECT name, base_price_cents, stock_quantity
+             FROM products WHERE sku = 'PROVIDER3-001'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("development provider product should be available");
+        assert_eq!(
+            provider,
+            ("provider3".to_owned(), "provider".to_owned(), true)
+        );
+        assert_eq!(product, ("A DOLLAR".to_owned(), 100, 1000));
     }
 }
