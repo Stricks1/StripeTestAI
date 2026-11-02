@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101216">
+  <title>Admin dashboard · Stripe Test Marketplace</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/common.js" defer></script>
+  <script src="/assets/admin.js" defer></script>
+</head>
+<body>
+  <header class="site-header workspace-header">
+    <a class="wordmark" href="/admin">TEST MARKET <span>/ OPERATIONS</span></a>
+    <nav class="workspace-nav" aria-label="Admin navigation">
+      <a href="/admin" aria-current="page">OVERVIEW</a>
+      <a href="#products">PRODUCTS</a>
+      <a href="#providers">PROVIDERS</a>
+    </nav>
+    <div class="header-meta">
+      <span class="environment-tag">ADMIN</span>
+      <button id="logout-button" class="text-button" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main class="workspace-main">
+    <section class="workspace-title">
+      <h1>Marketplace performance</h1>
+      <p class="record-code">SALES <span>/</span> FEES <span>/</span> PROVIDERS</p>
+    </section>
+
+    <form id="admin-filters" class="filter-row dashboard-filters">
+      <label class="field compact-field">Reporting period
+        <select name="days">
+          <option value="30">Last 30 days</option>
+          <option value="7">Last 7 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last 365 days</option>
+        </select>
+      </label>
+      <label class="field compact-field">Provider
+        <select name="provider_id"><option value="">All providers</option></select>
+      </label>
+      <label class="field compact-field">Product
+        <select name="product_id"><option value="">All products</option></select>
+      </label>
+      <button class="secondary-button" type="submit">APPLY</button>
+    </form>
+    <div id="admin-message" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <section class="metric-ledger admin-metrics" aria-label="Filtered marketplace totals">
+      <div><strong id="gross-sales">$0.00</strong><span>Gross sales</span></div>
+      <div><strong id="stripe-fees">$0.00</strong><span>Stripe fees</span></div>
+      <div><strong id="refunds">$0.00</strong><span>Refunds</span></div>
+      <div><strong id="platform-commission">$0.00</strong><span>Platform commission</span></div>
+      <div><strong id="net-total">$0.00</strong><span>Net after fees and refunds</span></div>
+    </section>
+    <p id="fee-note" class="quiet-copy accounting-note"></p>
+
+    <div class="admin-grid">
+      <section class="report-panel" aria-labelledby="sales-chart-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="sales-chart-heading">Sales over time</h2>
+            <p class="quiet-copy">Filtered gross value by day · USD</p>
+          </div>
+        </div>
+        <div id="admin-chart" class="chart-frame"></div>
+      </section>
+      <section class="report-panel balance-panel" aria-labelledby="balance-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="balance-heading">Stripe account balance</h2>
+            <p class="quiet-copy">Current platform test account · not limited by report filters</p>
+          </div>
+        </div>
+        <div class="balance-ledger">
+          <div><span>Available</span><strong id="balance-available">—</strong></div>
+          <div><span>Pending</span><strong id="balance-pending">—</strong></div>
+        </div>
+        <p id="balance-message" class="quiet-copy"></p>
+      </section>
+    </div>
+
+    <section id="products" class="report-section" aria-labelledby="product-sales-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="product-sales-heading">Sales by product</h2>
+          <p class="quiet-copy">Paid units and gross value in the selected period</p>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>PRODUCT</th><th>PROVIDER</th><th>UNITS SOLD</th><th>GROSS</th></tr></thead>
+          <tbody id="product-sales-table"></tbody>
+        </table>
+      </div>
+      <p id="product-sales-empty" class="empty-state" hidden>No product sales match these filters.</p>
+    </section>
+
+    <section id="providers" class="report-section" aria-labelledby="provider-sales-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="provider-sales-heading">Sales by provider</h2>
+          <p class="quiet-copy">Commission reflects the selected product share when a product filter is active.</p>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>PROVIDER</th><th>PRODUCTS SOLD</th><th>UNITS SOLD</th><th>GROSS</th><th>PLATFORM COMMISSION</th></tr></thead>
+          <tbody id="provider-sales-table"></tbody>
+        </table>
+      </div>
+      <p id="provider-sales-empty" class="empty-state" hidden>No provider sales match these filters.</p>
+    </section>
+  </main>
+</body>
+</html>

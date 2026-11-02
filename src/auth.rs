@@ -23,6 +23,7 @@ pub struct RegisterInput {
     username: String,
     email: String,
     password: String,
+    role: String,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +45,7 @@ struct UserRecord {
     password_hash: String,
     email_verified: bool,
     is_admin: bool,
+    role: String,
 }
 
 #[derive(FromRow)]
@@ -57,6 +59,7 @@ struct PublicUser {
     username: String,
     email: String,
     is_admin: bool,
+    role: String,
 }
 
 pub async fn index_page() -> Html<&'static str> {
@@ -90,6 +93,11 @@ pub async fn register(
             "Password must be between 8 and 128 characters.",
         ));
     }
+    if !matches!(input.role.as_str(), "customer" | "provider") {
+        return Err(AppError::bad_request(
+            "Choose either a customer or provider account.",
+        ));
+    }
 
     let password_hash = hash_password(&input.password).map_err(|error| {
         tracing::error!(error = %error, "Could not hash registration password");
@@ -100,10 +108,11 @@ pub async fn register(
     let expires_at = unix_now()? + EMAIL_TOKEN_TTL_SECONDS;
     let mut transaction = state.pool.begin().await?;
     let inserted =
-        sqlx::query("INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)")
+        sqlx::query("INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)")
             .bind(username)
             .bind(&email)
             .bind(password_hash)
+            .bind(&input.role)
             .execute(&mut *transaction)
             .await;
     let user_id = match inserted {
@@ -154,7 +163,7 @@ pub async fn login(
 ) -> Result<impl IntoResponse, AppError> {
     let identifier = input.username.trim();
     let user = sqlx::query_as::<_, UserRecord>(
-        "SELECT id, username, email, password_hash, email_verified, is_admin
+        "SELECT id, username, email, password_hash, email_verified, is_admin, role
          FROM users WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE",
     )
     .bind(identifier)
@@ -181,6 +190,19 @@ pub async fn login(
         ));
     }
 
+    sqlx::query(
+        "UPDATE users
+         SET provider_unseen_since = CASE
+                 WHEN role = 'provider' THEN COALESCE(provider_unseen_since, last_login_at, unixepoch())
+                 ELSE provider_unseen_since
+             END,
+             last_login_at = unixepoch()
+         WHERE id = ?",
+    )
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?;
+
     session.cycle_id().await.map_err(|error| {
         tracing::error!(error = %error, "Could not rotate login session");
         AppError::internal("The session could not be started.")
@@ -194,6 +216,7 @@ pub async fn login(
             username: user.username,
             email: user.email,
             is_admin: user.is_admin,
+            role: user.role,
         }
     })))
 }
@@ -214,7 +237,7 @@ pub async fn me(
         return Ok(Json(json!({ "user": null })));
     };
     let user = sqlx::query_as::<_, PublicUserRecord>(
-        "SELECT username, email, is_admin FROM users WHERE id = ? AND email_verified = 1",
+        "SELECT username, email, is_admin, role FROM users WHERE id = ? AND email_verified = 1",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
@@ -223,6 +246,7 @@ pub async fn me(
         username: row.username,
         email: row.email,
         is_admin: row.is_admin,
+        role: row.role,
     });
     Ok(Json(json!({ "user": user })))
 }
@@ -232,6 +256,7 @@ struct PublicUserRecord {
     username: String,
     email: String,
     is_admin: bool,
+    role: String,
 }
 
 pub async fn verify_email(
@@ -281,6 +306,28 @@ pub async fn session_user_id(session: &Session) -> Result<Option<i64>, AppError>
         tracing::error!(error = %error, "Could not read login session");
         AppError::internal("The session could not be read.")
     })
+}
+
+pub async fn require_role(
+    session: &Session,
+    pool: &sqlx::SqlitePool,
+    expected_role: &str,
+) -> Result<i64, AppError> {
+    let user_id = session_user_id(session)
+        .await?
+        .ok_or_else(|| AppError::unauthorized("Sign in to continue."))?;
+    let role: Option<String> =
+        sqlx::query_scalar("SELECT role FROM users WHERE id = ? AND email_verified = 1")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    match role.as_deref() {
+        Some(role) if role == expected_role => Ok(user_id),
+        Some(_) => Err(AppError::forbidden(
+            "Your account does not have permission to access this area.",
+        )),
+        None => Err(AppError::unauthorized("Sign in to continue.")),
+    }
 }
 
 pub fn hash_password(password: &str) -> Result<String, argon2::password_hash::Error> {

@@ -1,11 +1,6 @@
-const authView = document.querySelector("#auth-view");
-const storeView = document.querySelector("#store-view");
 const signInForm = document.querySelector("#signin-form");
 const registerForm = document.querySelector("#register-form");
 const authMessage = document.querySelector("#auth-message");
-const storeMessage = document.querySelector("#store-message");
-const productsView = document.querySelector("#products-view");
-const productList = document.querySelector("#product-list");
 
 async function api(url, options = {}) {
   const response = await fetch(url, {
@@ -50,11 +45,18 @@ function setAuthMode(mode) {
   authMessage.hidden = true;
 }
 
-function showStore(user) {
-  authView.hidden = true;
-  storeView.hidden = false;
-  document.querySelector("#logout-button").hidden = false;
-  document.querySelector("#username-label").textContent = user.username;
+function openWorkspace(user) {
+  const destinations = {
+    admin: "/admin",
+    provider: "/provider",
+    customer: "/store",
+  };
+  const destination = destinations[user.role];
+  if (!destination) {
+    showMessage(authMessage, "This account does not have a supported workspace.", "error");
+    return;
+  }
+  window.location.assign(destination);
 }
 
 document.querySelector("#signin-tab").addEventListener("click", () => setAuthMode("signin"));
@@ -74,7 +76,7 @@ signInForm.addEventListener("submit", async (event) => {
         password: form.get("password"),
       }),
     });
-    showStore(result.user);
+    openWorkspace(result.user);
   } catch (error) {
     showMessage(authMessage, error.message, "error");
   } finally {
@@ -95,6 +97,7 @@ registerForm.addEventListener("submit", async (event) => {
         username: form.get("username"),
         email: form.get("email"),
         password: form.get("password"),
+        role: form.get("role"),
       }),
     });
     showConfirmationLink(authMessage, result);
@@ -110,58 +113,14 @@ document.querySelector("#logout-button").addEventListener("click", async () => {
     await api("/api/auth/logout", { method: "POST", body: "{}" });
     window.location.reload();
   } catch (error) {
-    showMessage(storeMessage, error.message, "error");
+    showMessage(authMessage, error.message, "error");
   }
 });
-
-document.querySelector("#products-button").addEventListener("click", async () => {
-  productsView.hidden = false;
-  productList.replaceChildren();
-  showMessage(storeMessage, "Loading the test catalog.");
-  try {
-    const products = await api("/api/products");
-    storeMessage.hidden = true;
-    if (products.length === 0) {
-      showMessage(storeMessage, "There are no active products yet.");
-      return;
-    }
-    for (const product of products) {
-      const article = document.createElement("article");
-      article.className = "product-record";
-      const sku = document.createElement("div");
-      sku.className = "product-id";
-      sku.textContent = product.sku;
-      const details = document.createElement("div");
-      const name = document.createElement("h3");
-      name.textContent = product.name;
-      const description = document.createElement("p");
-      description.textContent = product.description;
-      const price = document.createElement("div");
-      price.className = "product-price";
-      price.textContent = `Default amount ${formatUsd(product.base_price_cents)}`;
-      details.append(name, description, price);
-      const buy = document.createElement("a");
-      buy.className = "primary-button buy-link";
-      buy.href = `/checkout?product_id=${encodeURIComponent(product.id)}`;
-      buy.target = "_blank";
-      buy.rel = "noopener noreferrer";
-      buy.textContent = "BUY";
-      article.append(sku, details, buy);
-      productList.append(article);
-    }
-  } catch (error) {
-    showMessage(storeMessage, error.message, "error");
-  }
-});
-
-function formatUsd(cents) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
-}
 
 async function loadCurrentUser() {
   try {
     const result = await api("/api/auth/me");
-    if (result.user) showStore(result.user);
+    if (result.user) openWorkspace(result.user);
   } catch (error) {
     showMessage(authMessage, error.message, "error");
   }

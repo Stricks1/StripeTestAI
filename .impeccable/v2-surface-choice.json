@@ -1,0 +1,48 @@
+{
+  "title": "Choose the V2 workspace layout",
+  "question": "Which structure best supports the customer, provider, and admin workspaces?",
+  "options": [
+    {
+      "id": "role-workspace",
+      "kind": "assigned",
+      "label": "Role workspace",
+      "kicker": "THE ROLL",
+      "lineage": "Purpose-built workspaces for distinct marketplace roles",
+      "thesis": "Each role opens directly into the tools and data they need.",
+      "palette": ["#101216", "#f4f0e6", "#e7a13a", "#78c5b7"],
+      "materials": ["matte ink", "warm paper", "numbered records"],
+      "viewport": "A persistent role-aware sidebar anchors a concise dashboard with task-specific data.",
+      "risk": "Role-specific navigation needs clear shared account and logout controls.",
+      "html": ".impeccable/mocks/decision/v2-role-workspace.html"
+    },
+    {
+      "id": "catalog-led",
+      "kind": "dealt",
+      "label": "Catalog-led marketplace",
+      "lineage": "A searchable product catalog connected to role-specific tools",
+      "thesis": "Product discovery leads; cart and inventory stay visible while browsing.",
+      "palette": ["#101216", "#f4f0e6", "#e7a13a", "#78c5b7"],
+      "materials": ["matte ink", "warm paper", "numbered records"],
+      "viewport": "Search and price filters lead a product grid; a compact cart summary stays in view.",
+      "risk": "The catalog is central to customers but secondary to provider and admin tasks.",
+      "html": ".impeccable/mocks/decision/v2-catalog-led.html"
+    },
+    {
+      "id": "sales-led",
+      "kind": "dealt",
+      "label": "Sales-led overview",
+      "lineage": "Marketplace performance grouped by product and provider",
+      "thesis": "Sales, stock, and unread purchases share one clear operational overview.",
+      "palette": ["#101216", "#f4f0e6", "#e7a13a", "#78c5b7"],
+      "materials": ["matte ink", "warm paper", "numbered records"],
+      "viewport": "Admin and provider dashboards lead with totals, a product/provider chart, and a sortable sales table.",
+      "risk": "Analytics-first views can make common catalog and editing tasks feel secondary.",
+      "html": ".impeccable/mocks/decision/v2-sales-led.html"
+    }
+  ],
+  "reroll": false,
+  "buildPath": {
+    "value": "code",
+    "toggle": false
+  }
+}

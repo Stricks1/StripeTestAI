@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101216">
+  <title>Products · Stripe Test Marketplace</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/common.js" defer></script>
+  <script src="/assets/store.js" defer></script>
+</head>
+<body>
+  <header class="site-header workspace-header">
+    <a class="wordmark" href="/store">TEST MARKET <span>/ CATALOGUE</span></a>
+    <nav class="workspace-nav" aria-label="Customer navigation">
+      <a href="/store" aria-current="page">PRODUCTS</a>
+      <a href="#cart">CART <span id="cart-count">0</span></a>
+    </nav>
+    <div class="header-meta">
+      <span id="customer-name" class="environment-tag"></span>
+      <button id="logout-button" class="text-button" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main class="workspace-main store-workspace">
+    <section class="workspace-title">
+      <h1>Browse products</h1>
+      <p class="record-code">CUSTOMER <span>/</span> CATALOGUE</p>
+      <p>Products from independent providers, gathered in one place.</p>
+    </section>
+
+    <div class="store-columns">
+      <section class="catalog-column" aria-labelledby="catalog-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="catalog-heading">Available now</h2>
+            <p id="catalog-count" class="quiet-copy">Loading products…</p>
+          </div>
+        </div>
+        <form id="catalog-filters" class="filter-row">
+          <label class="field compact-field">Search name
+            <input name="q" type="search" maxlength="100" placeholder="Product or collection">
+          </label>
+          <label class="field compact-field">Minimum price
+            <input name="min_price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="$0.00">
+          </label>
+          <label class="field compact-field">Maximum price
+            <input name="max_price" type="number" min="0" step="0.01" inputmode="decimal" placeholder="No limit">
+          </label>
+          <button class="secondary-button" type="submit">FILTER</button>
+        </form>
+        <div id="catalog-message" class="notice" role="status" aria-live="polite" hidden></div>
+        <div id="product-list" class="catalog-list" aria-live="polite"></div>
+      </section>
+
+      <aside id="cart" class="cart-panel" aria-labelledby="cart-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="cart-heading">Your cart</h2>
+            <p class="record-code">CURRENT SELECTION</p>
+          </div>
+          <span id="cart-count-label" class="test-tag">0 ITEMS</span>
+        </div>
+        <div id="cart-items" class="cart-items"></div>
+        <div class="cart-total">
+          <span>Subtotal</span>
+          <strong id="cart-total">$0.00</strong>
+        </div>
+        <button id="checkout-button" class="primary-button" type="button" disabled>CONTINUE TO PAYMENT</button>
+        <p class="panel-note">Payment opens in a separate window. Card details go directly to Stripe.</p>
+        <div id="cart-message" class="notice" role="status" aria-live="polite" hidden></div>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>

@@ -13,6 +13,8 @@ use tokio::sync::Mutex;
 
 const PAYMENT_ATTEMPT_LIMIT: usize = 3;
 const PAYMENT_ATTEMPT_WINDOW: Duration = Duration::from_secs(15 * 60);
+const SMALL_ORDER_THRESHOLD_CENTS: i64 = 500;
+const SMALL_ORDER_WARNING_COUNT: usize = 5;
 const MAX_TRACKED_PAYMENT_IDENTITIES: usize = 10_000;
 
 #[derive(Clone, Copy, Hash, Eq, PartialEq)]
@@ -24,6 +26,7 @@ enum PaymentRateLimitKey {
 #[derive(Clone, Default)]
 pub struct PaymentRateLimiter {
     attempts: Arc<Mutex<HashMap<PaymentRateLimitKey, VecDeque<Instant>>>>,
+    small_orders: Arc<Mutex<HashMap<i64, VecDeque<(Instant, i64)>>>>,
 }
 
 impl PaymentRateLimiter {
@@ -35,6 +38,42 @@ impl PaymentRateLimiter {
     pub async fn check_user(&self, user_id: i64) -> Result<(), u64> {
         self.check_at(PaymentRateLimitKey::User(user_id), Instant::now())
             .await
+    }
+
+    pub async fn record_small_order(&self, user_id: i64, order_id: i64, amount_cents: i64) {
+        if amount_cents > SMALL_ORDER_THRESHOLD_CENTS {
+            return;
+        }
+        let now = Instant::now();
+        let mut orders = self.small_orders.lock().await;
+        if !orders.contains_key(&user_id) && orders.len() >= MAX_TRACKED_PAYMENT_IDENTITIES {
+            orders.retain(|_, timestamps| {
+                prune_small_orders(timestamps, now);
+                !timestamps.is_empty()
+            });
+            if orders.len() >= MAX_TRACKED_PAYMENT_IDENTITIES {
+                tracing::warn!("Small-order monitor reached its tracked user capacity");
+                return;
+            }
+        }
+
+        let customer_orders = orders.entry(user_id).or_default();
+        prune_small_orders(customer_orders, now);
+        if customer_orders
+            .iter()
+            .any(|(_, existing_id)| *existing_id == order_id)
+        {
+            return;
+        }
+        customer_orders.push_back((now, order_id));
+        if customer_orders.len() >= SMALL_ORDER_WARNING_COUNT {
+            tracing::warn!(
+                user_id,
+                small_orders = customer_orders.len(),
+                window_minutes = PAYMENT_ATTEMPT_WINDOW.as_secs() / 60,
+                "Repeated small marketplace orders detected"
+            );
+        }
     }
 
     async fn check_at(&self, key: PaymentRateLimitKey, now: Instant) -> Result<(), u64> {
@@ -65,6 +104,14 @@ impl PaymentRateLimiter {
 
 fn prune_expired(timestamps: &mut VecDeque<Instant>, now: Instant) {
     while timestamps.front().is_some_and(|timestamp| {
+        now.saturating_duration_since(*timestamp) >= PAYMENT_ATTEMPT_WINDOW
+    }) {
+        timestamps.pop_front();
+    }
+}
+
+fn prune_small_orders(timestamps: &mut VecDeque<(Instant, i64)>, now: Instant) {
+    while timestamps.front().is_some_and(|(timestamp, _)| {
         now.saturating_duration_since(*timestamp) >= PAYMENT_ATTEMPT_WINDOW
     }) {
         timestamps.pop_front();
@@ -156,6 +203,25 @@ mod tests {
             Ok(())
         );
     }
+
+    #[tokio::test]
+    async fn small_order_monitor_counts_distinct_orders_only() {
+        let limiter = PaymentRateLimiter::default();
+        for order_id in 1..=SMALL_ORDER_WARNING_COUNT as i64 {
+            limiter
+                .record_small_order(42, order_id, SMALL_ORDER_THRESHOLD_CENTS)
+                .await;
+        }
+        limiter
+            .record_small_order(42, 5, SMALL_ORDER_THRESHOLD_CENTS)
+            .await;
+        limiter
+            .record_small_order(42, 6, SMALL_ORDER_THRESHOLD_CENTS + 1)
+            .await;
+
+        let orders = limiter.small_orders.lock().await;
+        assert_eq!(orders.get(&42).expect("tracked account").len(), 5);
+    }
 }
 
 #[derive(Clone)]
@@ -176,6 +242,7 @@ pub struct AppState {
     pub stripe_http: reqwest::Client,
     pub stripe_secret_key: Option<String>,
     pub stripe_publishable_key: Option<String>,
+    pub stripe_webhook_secret: Option<String>,
     pub payment_rate_limiter: PaymentRateLimiter,
     pub app_env: String,
     pub base_url: String,
@@ -210,6 +277,7 @@ impl AppState {
             stripe_http: reqwest::Client::new(),
             stripe_secret_key: optional_env("STRIPE_SECRET_KEY"),
             stripe_publishable_key: optional_env("STRIPE_PUBLISHABLE_KEY"),
+            stripe_webhook_secret: optional_env("STRIPE_WEBHOOK_SECRET"),
             payment_rate_limiter: PaymentRateLimiter::default(),
             app_env: std::env::var("APP_ENV").unwrap_or_else(|_| "development".to_owned()),
             base_url: std::env::var("APP_BASE_URL")

@@ -1,13 +1,14 @@
 # Stripe integration reference
 
-This is a local, project-specific index to Stripe's official documentation, reviewed on 2026-11-01. It records the current MVP integration and the decisions to revisit for future payment features. Stripe's online documentation is authoritative and can change; consult the linked pages again before implementing or upgrading an integration. This file intentionally summarizes the guidance instead of copying Stripe's documentation.
+This is a local, project-specific index to Stripe's official documentation, reviewed on 2026-11-01. It records the current marketplace integration and decisions to revisit for future payment features. Stripe's online documentation is authoritative and can change; consult the linked pages again before implementing or upgrading an integration. This file intentionally summarizes the guidance instead of copying Stripe's documentation.
 
-## Current MVP
+## Current marketplace prototype
 
-- The storefront uses a server-created PaymentIntent and Stripe.js Payment Element. The server validates the USD amount, requires test-mode keys, stores the Stripe PaymentIntent ID and payment status in SQLite, and checks the intent status with Stripe before showing a result.
-- Card details go directly to Stripe; they are not handled or stored by the application.
-- The Rust request and response flow lives in `src/payments.rs`; environment configuration is in `src/state.rs`; persisted payment fields are in `migrations/0001_initial.sql`; local setup is in `README.md`.
-- The current flow is a deliberately small prototype, not a webhook-backed fulfillment or recurring-billing system.
+- The marketplace creates a server-side PaymentIntent for each reserved customer order and uses Stripe.js Payment Element for card entry. Card details go directly to Stripe; they are not handled or stored by the application.
+- Signed webhooks confirm payments and process cancellations/refunds. The endpoint verifies Stripe signatures and stores event IDs for retry idempotency. Configure `STRIPE_WEBHOOK_SECRET`; the [README](README.md) includes Stripe CLI setup.
+- Orders, item snapshots, product stock reservations, Stripe payment identifiers, actual/estimated fees, provider allocations, and webhook event IDs are persisted in SQLite by `migrations/0002_marketplace.sql`.
+- The Rust marketplace and webhook flow lives in `src/marketplace.rs`; environment configuration is in `src/state.rs`.
+- The prototype sends customer payments to the platform's Stripe account. It does not onboard connected accounts or make provider transfers.
 
 ### Current integration documentation
 
@@ -19,7 +20,7 @@ This is a local, project-specific index to Stripe's official documentation, revi
 - [Payment Element with Checkout Sessions](https://docs.stripe.com/payments/checkout) and [hosted Checkout quickstart](https://docs.stripe.com/checkout/quickstart)
 - [Radar fraud prevention rules](https://docs.stripe.com/radar/rules) and [card-testing prevention](https://docs.stripe.com/disputes/prevention/card-testing) — built-in Radar checks apply to transactions; review risk controls and any custom rules in the Dashboard. The application intentionally does not collect card numbers.
 
-**Future review:** Stripe's current Payment Intents guidance recommends Checkout Sessions with the Payment Element for most integrations. The MVP's custom PaymentIntent flow is working as implemented, but compare the current recommendation and feature requirements before expanding it. Checkout Sessions uses a different client integration; it is not a drop-in API substitution.
+**Future review:** Stripe's current Payment Intents guidance recommends Checkout Sessions with the Payment Element for most integrations. Before expanding the custom PaymentIntent flow, compare Checkout Sessions and its fulfillment model against the marketplace's needs; it is not a drop-in API substitution.
 
 ## Future payments: identify the requirement first
 
@@ -54,6 +55,10 @@ Decide whether the business needs the seller to collect each installment or want
 - Use [idempotency keys](https://docs.stripe.com/api/idempotent_requests) for server-side create operations that may be retried.
 - Keep secrets in local environment configuration or a production secret manager. Use test-mode keys and test events while developing; never paste secret keys into chat or commit them.
 - Consult current Stripe API versions, supported regions, currencies, and method-specific requirements at implementation time.
+
+## Marketplace allocation policy
+
+The current accounting rule caps the combined Stripe fee and platform commission at 10% of gross. Actual Stripe fees are read from the charge's expanded balance transaction when available; the dashboard labels the configured 3.99% + USD $0.39 calculation as an estimate until that data exists. Actual fees are allocated among providers proportionally to their order gross. Platform commission is the remainder of the 10% cap, floored at zero. If Stripe fees exceed the cap, the platform absorbs the excess and the provider accounting share remains 90% of gross. This is internal accounting only; no provider payout or Connect transfer occurs.
 
 ## Suggested reading order for the next payment feature
 

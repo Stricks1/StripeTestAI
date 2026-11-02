@@ -1,13 +1,18 @@
-# Stripe Test Store
+# Stripe Test Marketplace
 
-A small, local-only Rust/Axum storefront for account confirmation and one Stripe test payment.
+A local Rust/Axum and SQLite marketplace prototype with customer, provider, and admin workspaces. Stripe test-mode payments are handled through PaymentIntents and Stripe.js Payment Element.
 
 ## Run locally
 
-1. Copy `.env.example` to `.env`.
-2. Leave `EMAIL_MODE=console` for local verification links, or configure SMTP as described below.
-3. Add a Stripe **test** secret key (`sk_test_...`) and publishable key (`pk_test_...`) to `.env` when ready. The payment form stays unavailable until both test keys are configured.
-4. Start the app:
+1. Copy `.env.example` to `.env`:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+2. Keep `EMAIL_MODE=console` to use local confirmation links, or configure SMTP.
+3. Add your Stripe **test-mode** secret and publishable keys to `.env`. Never commit `.env` or paste secret keys into chat.
+4. Start the server:
 
    ```powershell
    cargo run
@@ -15,29 +20,49 @@ A small, local-only Rust/Axum storefront for account confirmation and one Stripe
 
 5. Open <http://127.0.0.1:3000>.
 
-The first start creates the SQLite database and a sample product. In development, it also seeds the `admin` / `admin` account. Passwords are stored as Argon2 hashes. The local console email mode logs a one-time confirmation link and displays it after registration so the flow can be tested without an email provider.
+The first development start creates the SQLite database and an `admin` / `admin` account. This is local-only; change the password and do not expose the app publicly. Passwords are stored as Argon2 hashes. Console email mode logs a one-time confirmation link after registration.
+
+## Roles and marketplace flow
+
+- **Admin:** sign in with the seeded development account to view platform sales, products, provider totals, and the Stripe test-account balance.
+- **Provider:** register and confirm a provider account, then create, edit, or archive products. Products have a fixed USD price and stock quantity. Archive only hides a product; it does not delete product, order, or payment history.
+- **Customer:** register and confirm a customer account, browse and filter the catalog, select quantities, and pay for the cart.
+
+Stripe Payment Element sends card details directly to Stripe. The application server does not receive or store card numbers. The server requests 3D Secure when supported; Stripe and the card issuer decide whether a challenge is required.
+
+## Stripe webhooks and inventory
+
+Payment fulfillment is confirmed by a signed Stripe webhook. For local development, install the [Stripe CLI](https://docs.stripe.com/stripe-cli), then in a second terminal run:
+
+```powershell
+stripe listen --forward-to http://127.0.0.1:3000/api/stripe/webhook
+```
+
+Copy the `whsec_...` signing secret printed by the CLI into `STRIPE_WEBHOOK_SECRET` in `.env`, then restart the app. Do not use a webhook signing secret from a different listener. The server verifies webhook signatures, rejects stale signatures, and records event IDs to make webhook retries idempotent.
+
+Checkout reserves stock for 30 minutes. Confirmed cancellation releases the reservation; a failed Stripe cancellation leaves stock reserved rather than risking overselling. Refunds are recorded, but refunded stock is not automatically restocked.
+
+## Accounting rules
+
+The platform's allocation cap is **10% of gross total**, shared between Stripe fees and platform commission; it is not an extra 10% on top of Stripe's fee. Stripe's actual fee is used when its balance transaction is available. Until then, the dashboard marks the estimate based on **3.99% + USD $0.39**. If the actual Stripe fee exceeds 10% of gross, platform commission becomes zero and the platform absorbs the excess; the provider's recorded gross share remains 90%. Provider dashboards show gross sales only.
+
+Payments currently go to the platform's Stripe account. Stripe Connect onboarding, transfers/provider payouts, subscriptions, and customer installment plans are not implemented. See [STRIPE-REFERENCE.md](STRIPE-REFERENCE.md) before planning those features.
 
 ## Email delivery
 
 To send confirmation messages over SMTP, set `EMAIL_MODE=smtp` and configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_FROM`. The SMTP transport uses TLS. Keep provider credentials in `.env`, never in source control.
 
-## Test payment flow
+## Fraud controls and test cards
 
-Sign in or create and confirm an account, choose **PRODUCTS**, and open the sample product's checkout. The amount is editable from USD $0.50 to $500.00 and is validated again by the server. Card entry uses Stripe.js Payment Element; card data is sent directly to Stripe and is never posted to or stored by this application. The Rust server creates a PaymentIntent and verifies its status against Stripe before displaying the result.
+Checkout requires a signed-in customer and permits up to 3 order/PaymentIntent creation attempts per direct client IP and per user account in separate rolling 15-minute windows. Further requests receive HTTP 429 with `Retry-After`. Users on the same home or office network share the IP limit; the account limit follows a user across IPs. Reaching 5 PaymentIntents of USD $5.00 or less for one account within 15 minutes writes a warning to the server log but does not automatically block the account.
 
-The payment API requires a signed-in user and allows up to 3 PaymentIntent creation attempts per client IP and per user account in separate rolling 15-minute windows. Further requests receive HTTP 429 with a `Retry-After` header. Because the IP limit is shared, users on the same home or office network share those 3 IP attempts; the separate account limit follows a user across IPs. The app requests 3D Secure for supported card payments; Stripe and the card issuer determine whether an authentication challenge can be performed. Reaching 5 PaymentIntents of USD $5.00 or less for the same account within 15 minutes writes a warning to the server log without automatically blocking the account.
+Stripe Radar evaluates payments using its built-in risk rules. Review or configure risk controls in the Stripe Dashboard's test-mode Radar settings. The application does not change Radar rules or store card numbers/fingerprints.
 
-Card numbers are entered through Stripe.js and are never available to this app. Stripe Radar evaluates payments using its built-in risk rules; review or configure fraud controls and any custom rules in the Stripe Dashboard's test-mode Radar settings. The application does not change Radar rules or store card numbers/fingerprints.
-
-For Stripe's standard test card, use `4242 4242 4242 4242`, any future expiry date, and any three-digit CVC. Use Stripe test mode only.
-
-See [STRIPE-REFERENCE.md](STRIPE-REFERENCE.md) for official Stripe documentation links, notes on this MVP's integration, and a guide to future Connect split payments versus customer installments.
+Use Stripe test mode only. For the standard test card, use `4242 4242 4242 4242`, any future expiry date, and any three-digit CVC.
 
 ## Local prototype limits
 
-- The app binds to `127.0.0.1` by default. Do not expose it publicly with the seeded `admin` / `admin` password.
-- Rate limiting uses the direct TCP peer address, not `X-Forwarded-For`, plus the authenticated user ID; both counters are in-memory, limited to a single running instance, and reset when the server restarts. A production deployment behind a proxy or using multiple instances needs trusted-proxy IP handling and shared rate-limit storage.
-- Sessions are in-memory and reset when the server restarts.
-- Stripe test keys are required for checkout; no key is included in this project.
-- There is no production deployment, webhook-driven fulfillment, subscription billing, or admin dashboard in this prototype.
-- A non-development run does not seed the default password; set a strong `BOOTSTRAP_ADMIN_PASSWORD` for the first admin account.
+- The app binds to `127.0.0.1:3000` by default. Do not expose it publicly with the seeded `admin` / `admin` password.
+- Sessions and rate limits are in-memory and reset when the server restarts. Rate limiting uses the direct TCP peer address, not `X-Forwarded-For`; production behind a proxy or multiple instances needs trusted proxy configuration and shared rate-limit storage.
+- Webhook fulfillment requires `STRIPE_WEBHOOK_SECRET`; without it, webhook requests return an explicit service-unavailable response.
+- In non-development environments, set a strong `BOOTSTRAP_ADMIN_PASSWORD` for the first admin account.

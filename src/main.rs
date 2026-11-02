@@ -1,13 +1,13 @@
 mod auth;
 mod error;
-mod payments;
+mod marketplace;
 mod state;
 
 use anyhow::{Context, Result};
 use argon2::{Argon2, PasswordHasher, password_hash::SaltString};
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use rand::rngs::OsRng;
 use sqlx::{
@@ -43,7 +43,6 @@ async fn main() -> Result<()> {
         .run(&pool)
         .await
         .context("Could not apply database migrations")?;
-    seed_product(&pool).await?;
     seed_admin(&pool).await?;
 
     let state = state::AppState::from_env(pool.clone())?;
@@ -52,22 +51,41 @@ async fn main() -> Result<()> {
         .with_secure(secure_cookie)
         .with_same_site(SameSite::Lax);
 
+    tokio::spawn(marketplace::expire_reservations_forever(state.clone()));
+
     let app = Router::new()
         .route("/", get(auth::index_page))
         .route("/verify", get(auth::verification_page))
-        .route("/checkout", get(payments::checkout_page))
-        .route("/payment/return", get(payments::payment_return_page))
+        .route("/store", get(marketplace::store_page))
+        .route("/provider", get(marketplace::provider_page))
+        .route("/admin", get(marketplace::admin_page))
+        .route("/checkout", get(marketplace::checkout_page))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/me", get(auth::me))
         .route("/api/auth/verify", post(auth::verify_email))
-        .route("/api/products", get(payments::products))
         .route(
-            "/api/payment-intents",
-            post(payments::create_payment_intent),
+            "/api/marketplace/products",
+            get(marketplace::customer_products),
         )
-        .route("/api/payments/{payment_id}", get(payments::payment_status))
+        .route(
+            "/api/provider/products",
+            get(marketplace::provider_products).post(marketplace::create_product),
+        )
+        .route(
+            "/api/provider/products/{product_id}",
+            patch(marketplace::update_product).delete(marketplace::archive_product),
+        )
+        .route(
+            "/api/provider/dashboard",
+            get(marketplace::provider_dashboard),
+        )
+        .route("/api/admin/filters", get(marketplace::admin_filter_options))
+        .route("/api/admin/dashboard", get(marketplace::admin_dashboard))
+        .route("/api/orders", post(marketplace::create_order))
+        .route("/api/orders/{order_id}", get(marketplace::order_status))
+        .route("/api/stripe/webhook", post(marketplace::stripe_webhook))
         .fallback_service(ServeDir::new("public"))
         .with_state(state)
         .layer(session_layer)
@@ -84,17 +102,6 @@ async fn main() -> Result<()> {
     )
     .await
     .context("HTTP server stopped")?;
-    Ok(())
-}
-
-async fn seed_product(pool: &SqlitePool) -> Result<()> {
-    sqlx::query(
-        "INSERT OR IGNORE INTO products (id, sku, name, description, base_price_cents, active)
-         VALUES (1, 'TEST-001', 'TEST PRODUCT', 'A single sample product for Stripe test payments.', 1000, 1)",
-    )
-    .execute(pool)
-    .await
-    .context("Could not seed the test product")?;
     Ok(())
 }
 
@@ -125,8 +132,8 @@ async fn seed_admin(pool: &SqlitePool) -> Result<()> {
         .map_err(|error| anyhow::anyhow!("Could not hash the initial admin password: {error}"))?
         .to_string();
     sqlx::query(
-        "INSERT INTO users (username, email, password_hash, email_verified, is_admin)
-         VALUES ('admin', 'admin@localhost', ?, 1, 1)",
+        "INSERT INTO users (username, email, password_hash, email_verified, is_admin, role)
+         VALUES ('admin', 'admin@localhost', ?, 1, 1, 'admin')",
     )
     .bind(password_hash)
     .execute(pool)
@@ -136,4 +143,71 @@ async fn seed_admin(pool: &SqlitePool) -> Result<()> {
         "Development admin account created (admin/admin); do not expose this app publicly"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqliteConnectOptions;
+
+    #[tokio::test]
+    async fn marketplace_migration_preserves_legacy_payment_history() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(":memory:")
+                    .foreign_keys(true),
+            )
+            .await
+            .expect("in-memory database should connect");
+
+        sqlx::raw_sql(include_str!("../migrations/0001_initial.sql"))
+            .execute(&pool)
+            .await
+            .expect("initial migration should apply");
+        sqlx::query(
+            "INSERT INTO users (username, email, password_hash, email_verified, is_admin)
+             VALUES ('admin', 'admin@localhost', 'hash', 1, 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy admin should insert");
+        sqlx::query(
+            "INSERT INTO products (sku, name, description, base_price_cents)
+             VALUES ('TEST-001', 'Legacy test product', '', 1000)",
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy product should insert");
+        sqlx::query(
+            "INSERT INTO payments (user_id, product_id, amount_cents, status)
+             VALUES (1, 1, 1000, 'succeeded')",
+        )
+        .execute(&pool)
+        .await
+        .expect("legacy payment should insert");
+
+        sqlx::raw_sql(include_str!("../migrations/0002_marketplace.sql"))
+            .execute(&pool)
+            .await
+            .expect("marketplace migration should apply");
+
+        let admin_role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("legacy admin role should be available");
+        let product_visible: bool = sqlx::query_scalar("SELECT visible FROM products WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("legacy product visibility should be available");
+        let legacy_payments: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM payments")
+            .fetch_one(&pool)
+            .await
+            .expect("legacy payment history should remain available");
+
+        assert_eq!(admin_role, "admin");
+        assert!(!product_visible);
+        assert_eq!(legacy_payments, 1);
+    }
 }

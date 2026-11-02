@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101216">
-  <title>Test Store</title>
+  <title>Stripe Test Marketplace</title>
   <link rel="stylesheet" href="/assets/styles.css">
   <script src="/assets/app.js" defer></script>
 </head>
 <body>
   <header class="site-header">
-    <a class="wordmark" href="/" aria-label="Test Store home">TEST STORE <span>/ RECORDS</span></a>
+    <a class="wordmark" href="/" aria-label="Stripe Test Marketplace home">TEST MARKET <span>/ RECORDS</span></a>
     <div class="header-meta">
       <span class="environment-tag">LOCAL TEST</span>
       <button id="logout-button" class="text-button" type="button" hidden>Sign out</button>
@@ -19,11 +19,11 @@
 
   <main id="auth-view" class="auth-layout">
     <section class="intro">
-      <h1>One product.<br>One clear checkout.</h1>
-      <p class="record-code">RECORD 001 <span>/</span> CUSTOMER ACCESS</p>
-      <p class="intro-copy">Sign in or create an account to open the test catalog and try a Stripe test payment.</p>
+      <h1>A marketplace,<br>in three workspaces.</h1>
+      <p class="record-code">CUSTOMER <span>/</span> PROVIDER <span>/</span> ADMIN</p>
+      <p class="intro-copy">Browse a shared catalog, manage provider products, or review sales across the marketplace.</p>
       <div class="catalog-stripe" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-      <p class="intro-foot">Email confirmation is required for new accounts.</p>
+      <p class="intro-foot">New accounts require email confirmation. Payments use Stripe test mode.</p>
     </section>
 
     <section class="auth-panel" aria-labelledby="auth-heading">
@@ -42,8 +42,14 @@
         <button class="primary-button" type="submit">SIGN IN</button>
       </form>
       <form id="register-form" hidden>
+        <label class="field">Account type
+          <select name="role" autocomplete="off" required>
+            <option value="customer">Customer</option>
+            <option value="provider">Provider</option>
+          </select>
+        </label>
         <label class="field">Username
-          <input name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._-]+">
+          <input name="username" autocomplete="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9._\x2d]+">
         </label>
         <label class="field">Email
           <input name="email" type="email" autocomplete="email" required maxlength="254">
@@ -54,25 +60,9 @@
         <button class="primary-button" type="submit">CREATE ACCOUNT</button>
       </form>
       <div id="auth-message" class="notice" role="status" aria-live="polite" hidden></div>
-      <p class="panel-note">Card details are entered securely with Stripe when you check out.</p>
+      <p class="panel-note">Card details are entered securely with Stripe Payment Element at checkout.</p>
     </section>
   </main>
 
-  <main id="store-view" class="store-layout" hidden>
-    <section class="store-heading">
-      <h1>Welcome, <span id="username-label"></span>.</h1>
-      <p class="record-code">CUSTOMER ACCESS <span>/</span> ACTIVE</p>
-      <p>One test product is ready when you are.</p>
-      <button id="products-button" class="primary-button products-button" type="button">PRODUCTS</button>
-    </section>
-    <section id="products-view" class="products-view" hidden aria-labelledby="products-heading">
-      <div class="section-heading">
-        <div><h2 id="products-heading">Products</h2><p class="record-code">CATALOG <span>/</span> 001</p></div>
-        <span class="test-tag">TEST ITEM</span>
-      </div>
-      <div id="product-list" class="product-list"></div>
-    </section>
-    <div id="store-message" class="notice" role="status" aria-live="polite" hidden></div>
-  </main>
 </body>
 </html>

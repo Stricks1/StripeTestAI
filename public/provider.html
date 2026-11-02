@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101216">
+  <title>Provider workspace · Stripe Test Marketplace</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+  <script src="/assets/common.js" defer></script>
+  <script src="/assets/provider.js" defer></script>
+</head>
+<body>
+  <header class="site-header workspace-header">
+    <a class="wordmark" href="/provider">TEST MARKET <span>/ PROVIDER</span></a>
+    <nav class="workspace-nav" aria-label="Provider navigation">
+      <a href="/provider" aria-current="page">OVERVIEW</a>
+      <a href="#products">PRODUCTS</a>
+      <a href="#orders">PURCHASES</a>
+    </nav>
+    <div class="header-meta">
+      <span id="provider-name" class="environment-tag"></span>
+      <button id="logout-button" class="text-button" type="button">Sign out</button>
+    </div>
+  </header>
+
+  <main class="workspace-main">
+    <section class="workspace-title title-with-action">
+      <div>
+        <h1>Provider overview</h1>
+        <p class="record-code">SALES <span>/</span> PRODUCTS <span>/</span> PURCHASES</p>
+      </div>
+      <span id="new-purchase-badge" class="new-badge" hidden></span>
+    </section>
+
+    <div id="provider-message" class="notice" role="status" aria-live="polite" hidden></div>
+
+    <section class="metric-ledger" aria-label="Provider totals">
+      <div><strong id="gross-sales">$0.00</strong><span>Gross sales</span></div>
+      <div><strong id="live-products">0</strong><span>Live products</span></div>
+      <div><strong id="purchase-count">0</strong><span>Purchases since last visit</span></div>
+    </section>
+    <p id="accounting-note" class="quiet-copy accounting-note"></p>
+
+    <div class="provider-grid">
+      <section class="report-panel" aria-labelledby="provider-chart-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="provider-chart-heading">Sales over time</h2>
+            <p class="quiet-copy">Gross value by day · last 30 days</p>
+          </div>
+        </div>
+        <div id="provider-chart" class="chart-frame"></div>
+      </section>
+      <section id="orders" class="report-panel" aria-labelledby="orders-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="orders-heading">Recent purchases</h2>
+            <p class="quiet-copy">Your latest paid orders</p>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <table>
+            <thead><tr><th>ORDER</th><th>UNITS</th><th>GROSS</th><th>DATE</th><th>STATUS</th></tr></thead>
+            <tbody id="orders-table"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <section id="products" class="report-section" aria-labelledby="products-heading">
+      <div class="section-heading section-heading-action">
+        <div>
+          <h2 id="products-heading">Your products</h2>
+          <p class="quiet-copy">Archiving hides a product without removing its sales history.</p>
+        </div>
+        <button id="new-product-button" class="secondary-button" type="button">ADD PRODUCT</button>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>PRODUCT</th><th>PRICE</th><th>STOCK</th><th>UNITS SOLD</th><th>GROSS</th><th>STATUS</th><th></th></tr></thead>
+          <tbody id="products-table"></tbody>
+        </table>
+      </div>
+      <p id="products-empty" class="empty-state" hidden>No products yet. Add your first product to list it in the marketplace.</p>
+    </section>
+
+    <section id="product-editor" class="editor-panel" aria-labelledby="editor-heading" hidden>
+      <div class="section-heading">
+        <div>
+          <h2 id="editor-heading">Add a product</h2>
+          <p class="quiet-copy">Set a fixed USD price and available stock.</p>
+        </div>
+      </div>
+      <form id="product-form" class="product-form">
+        <input name="product_id" type="hidden">
+        <label class="field">Product name
+          <input name="name" required minlength="2" maxlength="120">
+        </label>
+        <label class="field">Description
+          <textarea name="description" required maxlength="2000" rows="3"></textarea>
+        </label>
+        <label class="field">Price (USD)
+          <input name="price" type="number" min="0.50" max="500" step="0.01" required inputmode="decimal">
+        </label>
+        <label class="field">Stock quantity
+          <input name="stock_quantity" type="number" min="0" max="1000000" step="1" required>
+        </label>
+        <div class="form-actions">
+          <button class="primary-button" type="submit">SAVE PRODUCT</button>
+          <button id="cancel-edit-button" class="secondary-button" type="button">CANCEL</button>
+        </div>
+      </form>
+    </section>
+  </main>
+</body>
+</html>
