@@ -89,14 +89,23 @@ pub async fn create_payment_intent(
     session: Session,
     Json(input): Json<CreatePaymentInput>,
 ) -> Result<impl IntoResponse, AppError> {
-    if let Err(retry_after_secs) = state.payment_rate_limiter.check(peer.ip()).await {
+    if let Err(retry_after_secs) = state.payment_rate_limiter.check_ip(peer.ip()).await {
         tracing::warn!(
+            scope = "ip",
             retry_after_seconds = retry_after_secs,
             "Payment intent rate limit reached"
         );
         return Err(AppError::too_many_requests(retry_after_secs));
     }
     let user_id = require_user(&session).await?;
+    if let Err(retry_after_secs) = state.payment_rate_limiter.check_user(user_id).await {
+        tracing::warn!(
+            scope = "user",
+            retry_after_seconds = retry_after_secs,
+            "Payment intent rate limit reached"
+        );
+        return Err(AppError::too_many_requests(retry_after_secs));
+    }
     if !(MIN_AMOUNT_CENTS..=MAX_AMOUNT_CENTS).contains(&input.amount_cents) {
         return Err(AppError::bad_request(
             "Choose an amount from USD $0.50 to USD $500.00.",

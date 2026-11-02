@@ -13,32 +13,44 @@ use tokio::sync::Mutex;
 
 const PAYMENT_ATTEMPT_LIMIT: usize = 3;
 const PAYMENT_ATTEMPT_WINDOW: Duration = Duration::from_secs(15 * 60);
-const MAX_TRACKED_PAYMENT_IPS: usize = 10_000;
+const MAX_TRACKED_PAYMENT_IDENTITIES: usize = 10_000;
+
+#[derive(Clone, Copy, Hash, Eq, PartialEq)]
+enum PaymentRateLimitKey {
+    Ip(IpAddr),
+    User(i64),
+}
 
 #[derive(Clone, Default)]
 pub struct PaymentRateLimiter {
-    attempts: Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
+    attempts: Arc<Mutex<HashMap<PaymentRateLimitKey, VecDeque<Instant>>>>,
 }
 
 impl PaymentRateLimiter {
-    pub async fn check(&self, ip: IpAddr) -> Result<(), u64> {
-        self.check_at(ip, Instant::now()).await
+    pub async fn check_ip(&self, ip: IpAddr) -> Result<(), u64> {
+        self.check_at(PaymentRateLimitKey::Ip(ip), Instant::now())
+            .await
     }
 
-    async fn check_at(&self, ip: IpAddr, now: Instant) -> Result<(), u64> {
+    pub async fn check_user(&self, user_id: i64) -> Result<(), u64> {
+        self.check_at(PaymentRateLimitKey::User(user_id), Instant::now())
+            .await
+    }
+
+    async fn check_at(&self, key: PaymentRateLimitKey, now: Instant) -> Result<(), u64> {
         let mut attempts = self.attempts.lock().await;
-        if !attempts.contains_key(&ip) && attempts.len() >= MAX_TRACKED_PAYMENT_IPS {
+        if !attempts.contains_key(&key) && attempts.len() >= MAX_TRACKED_PAYMENT_IDENTITIES {
             attempts.retain(|_, timestamps| {
                 prune_expired(timestamps, now);
                 !timestamps.is_empty()
             });
-            if attempts.len() >= MAX_TRACKED_PAYMENT_IPS {
-                tracing::warn!("Payment rate limiter reached its tracked-IP capacity");
+            if attempts.len() >= MAX_TRACKED_PAYMENT_IDENTITIES {
+                tracing::warn!("Payment rate limiter reached its tracked identity capacity");
                 return Err(PAYMENT_ATTEMPT_WINDOW.as_secs());
             }
         }
 
-        let timestamps = attempts.entry(ip).or_default();
+        let timestamps = attempts.entry(key).or_default();
         prune_expired(timestamps, now);
         if timestamps.len() >= PAYMENT_ATTEMPT_LIMIT {
             let elapsed = now.saturating_duration_since(*timestamps.front().expect("non-empty"));
@@ -69,11 +81,20 @@ mod tests {
         let ip = IpAddr::from([127, 0, 0, 1]);
         let now = Instant::now();
 
-        assert_eq!(limiter.check_at(ip, now).await, Ok(()));
-        assert_eq!(limiter.check_at(ip, now).await, Ok(()));
-        assert_eq!(limiter.check_at(ip, now).await, Ok(()));
         assert_eq!(
-            limiter.check_at(ip, now).await,
+            limiter.check_at(PaymentRateLimitKey::Ip(ip), now).await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter.check_at(PaymentRateLimitKey::Ip(ip), now).await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter.check_at(PaymentRateLimitKey::Ip(ip), now).await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter.check_at(PaymentRateLimitKey::Ip(ip), now).await,
             Err(PAYMENT_ATTEMPT_WINDOW.as_secs())
         );
     }
@@ -86,13 +107,52 @@ mod tests {
         let now = Instant::now();
 
         for _ in 0..PAYMENT_ATTEMPT_LIMIT {
-            assert_eq!(limiter.check_at(first_ip, now).await, Ok(()));
+            assert_eq!(
+                limiter
+                    .check_at(PaymentRateLimitKey::Ip(first_ip), now)
+                    .await,
+                Ok(())
+            );
         }
-        assert_eq!(limiter.check_at(second_ip, now).await, Ok(()));
         assert_eq!(
             limiter
-                .check_at(first_ip, now + PAYMENT_ATTEMPT_WINDOW)
+                .check_at(PaymentRateLimitKey::Ip(second_ip), now)
                 .await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter
+                .check_at(
+                    PaymentRateLimitKey::Ip(first_ip),
+                    now + PAYMENT_ATTEMPT_WINDOW
+                )
+                .await,
+            Ok(())
+        );
+    }
+
+    #[tokio::test]
+    async fn user_attempts_are_shared_across_ips_and_isolated_between_users() {
+        let limiter = PaymentRateLimiter::default();
+        let now = Instant::now();
+        let ip = IpAddr::from([127, 0, 0, 1]);
+
+        for _ in 0..PAYMENT_ATTEMPT_LIMIT {
+            assert_eq!(
+                limiter.check_at(PaymentRateLimitKey::User(42), now).await,
+                Ok(())
+            );
+        }
+        assert_eq!(
+            limiter.check_at(PaymentRateLimitKey::User(42), now).await,
+            Err(PAYMENT_ATTEMPT_WINDOW.as_secs())
+        );
+        assert_eq!(
+            limiter.check_at(PaymentRateLimitKey::User(43), now).await,
+            Ok(())
+        );
+        assert_eq!(
+            limiter.check_at(PaymentRateLimitKey::Ip(ip), now).await,
             Ok(())
         );
     }

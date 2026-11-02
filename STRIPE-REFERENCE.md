@@ -17,6 +17,7 @@ This is a local, project-specific index to Stripe's official documentation, revi
 - [Test your integration](https://docs.stripe.com/testing)
 - [Payment Intents](https://docs.stripe.com/payments/payment-intents)
 - [Payment Element with Checkout Sessions](https://docs.stripe.com/payments/checkout) and [hosted Checkout quickstart](https://docs.stripe.com/checkout/quickstart)
+- [Radar fraud prevention rules](https://docs.stripe.com/radar/rules) and [card-testing prevention](https://docs.stripe.com/disputes/prevention/card-testing) — built-in Radar checks apply to transactions; review risk controls and any custom rules in the Dashboard. The application intentionally does not collect card numbers.
 
 **Future review:** Stripe's current Payment Intents guidance recommends Checkout Sessions with the Payment Element for most integrations. The MVP's custom PaymentIntent flow is working as implemented, but compare the current recommendation and feature requirements before expanding it. Checkout Sessions uses a different client integration; it is not a drop-in API substitution.
 
